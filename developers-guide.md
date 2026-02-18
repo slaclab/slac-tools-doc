@@ -4,7 +4,7 @@ This page is meant to help existing and new high level applications (HLA) develo
 
 ## Python versions
 
-By default, we should support stable versions of Python (not feature versions). As versions are declared end of life by Python.org (https://www.python.org/downloads/), tests and workflows should be updated accordingly. 
+By default, we should support stable versions of Python (not feature versions). As versions are declared end of life by [python.org](https://www.python.org/downloads/), tests and workflows should be updated accordingly. 
 
 ## Creating branches
 
@@ -12,3 +12,4 @@ Please develop on branches that are associated with issues. You can create a bra
 
 ## Development locations
 
+On production, HLA applications should save data in <$PHYSICS_DATA/<app>/>. 
