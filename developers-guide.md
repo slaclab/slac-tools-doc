@@ -17,7 +17,9 @@ Please try to follow the [PEP 8 Style Guide](https://peps.python.org/pep-0008/).
 
 ## Where to develop
 
-Please develop on branches that are associated with issues. You can create a branch from an issue on the lower right hand side of the issue page. 
+Please develop on branches that are associated with issues. You can create a branch from an issue on the lower right hand side of the issue page:
+<img width="1732" height="938" alt="create-issue-branch" src="https://github.com/user-attachments/assets/99257d5b-52ee-421c-8ea9-495c616f2be5" />
+
 
 ## Development locations
 
