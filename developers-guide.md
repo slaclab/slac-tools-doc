@@ -1,6 +1,6 @@
 # slac-tools Developers Guide
 
-This page is meant to help existing and new high level applications (HLA) developers of [slac-tools](https://github.com/slaclab/slac-tools). Contributions are welcome. To update this or other documents on slac-tools-doc, please follow these steps:
+This page is meant to help existing and new high level applications (HLA) developers of [slac-tools](https://github.com/slaclab/slac-tools). Contributions are welcome. To update this or other documents on slac-tools-doc, please try to follow these steps:
 1. Find or write an issue related to your changes.
 2. Start a branch from that issue page.
 3. Update the branch with your changes.
