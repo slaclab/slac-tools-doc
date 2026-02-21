@@ -15,15 +15,24 @@ By default, we support stable versions of Python (not feature versions). As vers
 ## Python style
 Please try to follow the [PEP 8 Style Guide](https://peps.python.org/pep-0008/). 
 
+## Dependancies
+New dependancies should meet the following requirements:
+- The repository is hosted by an organization or group
+- The repository ... 
+- TODO
+
 ## Where to develop
 
-Whether you develop on your local laptop or SLAC dev systems, please develop code on branches that are associated with issues. You can create a branch from an issue on the lower right hand side of the issue page. 
+Whether you develop on your local laptop or SLAC dev systems, please try to develop code on branches that are associated with issues. You can create a branch from an issue on the lower right hand side of the issue page. 
 
 <img width="1732" height="938" alt="create-issue-branch" src="https://github.com/user-attachments/assets/99257d5b-52ee-421c-8ea9-495c616f2be5" />
 
 ## Pull requests (PR)
 
 When you are ready to merge your code into the main branch, open a pull request. Linting and test workflows will automatically run on your code. One review and approval is required before merging. 
+
+## Linting 
+TODO: package, how to install/run locally
 
 ## Data locations
 
