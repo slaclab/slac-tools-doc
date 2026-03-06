@@ -707,28 +707,6 @@ if pv is not None:
 else:
     temp = None
 ```
-
-### 5. Incorrect Speed Assumptions
-
-**Problem**: Manually setting speed when it should be auto-calculated by IOC.
-
-```python
-# Generally unnecessary - IOC calculates speed automatically
-wire.speed = 10000  # Manual override (rarely needed)
-
-# Typical workflow - let IOC calculate speed
-wire.scan_pulses = 350
-wire.x_range = [37000, 45000]
-# IOC automatically calculates: speed = beam_rate × (range / pulses)
-wire.start_scan()  # IOC validates speed is within limits
-
-# Manual calculation only needed for pre-validation
-wire_range = wire.x_range[1] - wire.x_range[0]
-expected_speed = wire.beam_rate * (wire_range / wire.scan_pulses)
-if not (wire.speed_min < expected_speed < wire.speed_max):
-    print(f"Warning: Expected speed {expected_speed} outside limits")
-```
-
 ---
 
 ## Key Takeaways
