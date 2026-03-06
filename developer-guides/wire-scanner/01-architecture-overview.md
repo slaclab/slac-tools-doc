@@ -426,7 +426,7 @@ Layer 4 (GUI):
     - Optional eLog submission
 ```
 
-## Cross-Cutting Concerns
+## Shared System Concerns
 
 ### Error Handling
 
