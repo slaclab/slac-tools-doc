@@ -66,7 +66,6 @@ Low-level control of wire scanner hardware via EPICS Process Variables (PVs). Pr
 - Methods: `initialize()`, `start_scan()`, `abort_scan()`, `retract()`
 - Properties: `speed`, `enabled`, `homed`, `initialize_status`
 - Configuration: `set_range(plane, [inner, outer])`, `use(plane, bool)`
-- Validation: `@check_state`, `@check_speed` decorators enforce preconditions
 
 ### Design Patterns
 
@@ -77,12 +76,6 @@ class RangeModel:
     
 class PlaneModel:
     # Validates plane ∈ {X, Y, U}
-```
-
-**Decorator Guards**:
-```python
-@check_state  # Requires initialize_status == True
-@check_speed  # Validates speed within beam_rate constraints
 ```
 
 ### Example Usage
