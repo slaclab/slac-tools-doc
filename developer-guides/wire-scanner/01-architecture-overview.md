@@ -397,7 +397,8 @@ Layer 1 (Device):
 Layer 2a (Collection):
   WireMeasurementCollection.measure()
     - Reserve buffer
-    - wire.start_scan()  [call to Layer 1]
+    -- wire.start_scan() for on-the-fly scans [call to Layer 1]
+    -- wire.motor setter for step scans [call to Layer 1]
     - Synchronize acquisition
     - Extract raw data
     → WireMeasurementCollectionResult
