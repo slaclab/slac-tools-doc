@@ -15,7 +15,7 @@ By default, we support stable versions of Python (not feature versions). As vers
 ## Python style
 Please try to follow the [PEP 8 Style Guide](https://peps.python.org/pep-0008/). 
 
-## Dependancies
+## Dependencies
 New dependancies should meet the following requirements:
 - The repository is hosted by an organization or group
 - The repository ... 
