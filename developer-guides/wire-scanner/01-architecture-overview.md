@@ -462,6 +462,7 @@ except Exception as e:
 ### Thread Safety
 
 **Layers 1-3**: Not thread-safe (designed for sequential use)
+
 **Layer 4**: Qt signals/slots ensure thread-safe GUI updates from worker threads
 
 ---
