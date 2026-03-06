@@ -67,17 +67,6 @@ Low-level control of wire scanner hardware via EPICS Process Variables (PVs). Pr
 - Properties: `speed`, `enabled`, `homed`, `initialize_status`
 - Configuration: `set_range(plane, [inner, outer])`, `use(plane, bool)`
 
-### Design Patterns
-
-**Pydantic Models for Validation**:
-```python
-class RangeModel:
-    # Validates min < max for scan ranges
-    
-class PlaneModel:
-    # Validates plane ∈ {X, Y, U}
-```
-
 ### Example Usage
 
 ```python
