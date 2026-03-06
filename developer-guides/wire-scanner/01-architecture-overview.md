@@ -14,27 +14,27 @@ The Wire Scanner system is organized in four distinct layers, each with clear re
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                      GUI Layer (Level 4)                     │
-│                      ws_gui.py (slacwire)                    │
-│        PyQt5/PyDM interface, threading, plotting, eLog       │
+│                      GUI Layer (Level 4)                    │
+│                      ws_gui.py (slacwire)                   │
+│        PyQt5/PyDM interface, threading, plotting, eLog      │
 └─────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────┐
-│                  Orchestration Layer (Level 3)               │
-│                   ws_suite.py (slacwire)                     │
-│      WireScanSuite: run tracking, data mgmt, automation      │
+│                  Orchestration Layer (Level 3)              │
+│                   ws_suite.py (slacwire)                    │
+│      WireScanSuite: run tracking, data mgmt, automation     │
 └─────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────┐
-│                  Measurement Layer (Level 2)                 │
-│         ws_collection.py, ws_analysis.py (lcls-tools)        │
-│    Data collection, Gaussian fitting, RMS extraction         │
+│                  Measurement Layer (Level 2)                │
+│         ws_collection.py, ws_analysis.py (lcls-tools)       │
+│    Data collection, Gaussian fitting, RMS extraction        │
 └─────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────┐
-│                     Device Layer (Level 1)                   │
-│                  wire.py (lcls-tools)                        │
-│         EPICS PV control, motion management, state           │
+│                     Device Layer (Level 1)                  │
+│                  wire.py (lcls-tools)                       │
+│         EPICS PV control, motion management, state          │
 └─────────────────────────────────────────────────────────────┘
 ```
 
