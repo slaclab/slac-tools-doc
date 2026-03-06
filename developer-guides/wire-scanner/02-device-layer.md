@@ -657,13 +657,13 @@ else:
 
 ```python
 # May fail if not initialized
-wire.start_scan()
+wire.motor = 15000
 
 # Check state first
 if not wire.initialize_status:
     wire.initialize()
     # Wait for initialization to complete
-wire.start_scan()
+wire.motor = 15000
 ```
 
 ### 2. Direct PV Access
