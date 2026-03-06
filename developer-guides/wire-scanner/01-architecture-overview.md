@@ -14,27 +14,27 @@ The Wire Scanner system is organized in four distinct layers, each with clear re
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                      GUI Layer (Level 4)                     │
-│                      ws_gui.py (slacwire)                    │
-│        PyQt5/PyDM interface, threading, plotting, eLog       │
+│                      GUI Layer (Level 4)                    │
+│                      ws_gui.py (slacwire)                   │
+│        PyQt5/PyDM interface, threading, plotting, eLog      │
 └─────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────┐
-│                  Orchestration Layer (Level 3)               │
-│                   ws_suite.py (slacwire)                     │
-│      WireScanSuite: run tracking, data mgmt, automation      │
+│                  Orchestration Layer (Level 3)              │
+│                   ws_suite.py (slacwire)                    │
+│      WireScanSuite: run tracking, data mgmt, automation     │
 └─────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────┐
-│                  Measurement Layer (Level 2)                 │
-│         ws_collection.py, ws_analysis.py (lcls-tools)        │
-│    Data collection, Gaussian fitting, RMS extraction         │
+│                  Measurement Layer (Level 2)                │
+│         ws_collection.py, ws_analysis.py (lcls-tools)       │
+│    Data collection, Gaussian fitting, RMS extraction        │
 └─────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────┐
-│                     Device Layer (Level 1)                   │
-│                  wire.py (lcls-tools)                        │
-│         EPICS PV control, motion management, state           │
+│                     Device Layer (Level 1)                  │
+│                  wire.py (lcls-tools)                       │
+│         EPICS PV control, motion management, state          │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -397,7 +397,8 @@ Layer 1 (Device):
 Layer 2a (Collection):
   WireMeasurementCollection.measure()
     - Reserve buffer
-    - wire.start_scan()  [call to Layer 1]
+    -- wire.start_scan() for on-the-fly scans [call to Layer 1]
+    -- wire.motor setter for step scans [call to Layer 1]
     - Synchronize acquisition
     - Extract raw data
     → WireMeasurementCollectionResult
@@ -425,7 +426,7 @@ Layer 4 (GUI):
     - Optional eLog submission
 ```
 
-## Cross-Cutting Concerns
+## Shared System Concerns
 
 ### Error Handling
 
@@ -461,6 +462,7 @@ except Exception as e:
 ### Thread Safety
 
 **Layers 1-3**: Not thread-safe (designed for sequential use)
+
 **Layer 4**: Qt signals/slots ensure thread-safe GUI updates from worker threads
 
 ---
