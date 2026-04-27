@@ -1,7 +1,7 @@
 # slac-tools-doc
 Documentation related to accelerator HLA standards and devices. 
 
-# Repos
+## Repos
 There are several repos associated with this project. Here is the current list:
 
 - https://github.com/slaclab/slac-db
