@@ -1,6 +1,6 @@
 # SLAC Screens
 
-TOOD: Add info specific to screens. Background can be light/reference other sources, add PV or epics or 1-off info here. 
+TODO: Add info specific to screens. Background can be light/reference other sources, add PV or epics or 1-off info here. 
 
 ## Definition
 
