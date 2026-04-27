@@ -1,4 +1,4 @@
-# SLAC wires
+# SLAC Wires
 
 Wire scanners are a type of diagnostic that measure transverse beam profiles by passing a thin wire into the beam path.
 
