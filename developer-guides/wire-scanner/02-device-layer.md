@@ -4,7 +4,7 @@
 
 **Audience**: Developers working with wire scanner hardware interfaces, EPICS integration, or device-level functionality
 
-**Last Updated**: March 6, 2026
+**Last Updated**: May 28, 2026
 
 ---
 
@@ -18,12 +18,12 @@ The Device Layer provides the foundation for all wire scanner operations by mana
 - Safety interlocks and validation (speed limits, range constraints)
 - Profile plane selection (X, Y, U planes)
 
-**Location**: `lcls_tools/common/devices/wire.py`
+**Location**: `slac-devices/slac_devices/wire.py`
 
 **Dependencies**: 
 - `epics` - EPICS Channel Access client
 - `pydantic` - Data validation and type safety
-- `lcls_tools.common.devices.device` - Base device abstraction
+- `slac_devices.device` - Base device abstraction
 
 ---
 
@@ -73,10 +73,10 @@ The `Wire` class represents a single wire scanner device with three possible sim
 ### Initialization
 
 ```python
-from lcls_tools.common.devices.reader import create_wire
+from slac_devices.reader import create_wire
 
 # Create wire device from YAML configuration
-wire = create_wire(name="WS28144", area="L3")
+wire = create_wire(area="L3", name="WS28144")
 
 # Wire object includes:
 # - controls_information: WireControlInformation with PV connections
@@ -102,6 +102,7 @@ wire = create_wire(name="WS28144", area="L3")
 - `speed` - Current calculated speed (read/write, µm/s)
 - `speed_max` - Maximum allowable speed (read-only, µm/s)
 - `speed_min` - Minimum allowable speed (read-only, µm/s)
+- `mps_speed` - MPS speed limit (read-only, µm/s)
 
 **Scan Configuration**:
 - `scan_pulses` - Number of beam pulses to acquire (read/write)
@@ -119,7 +120,9 @@ wire = create_wire(name="WS28144", area="L3")
 - `initialize_status` - Initialization complete flag (read-only, bool)
 - `enabled` - Device enabled status (read-only, bool)
 - `homed` - Home position reached flag (read-only, bool)
-- `torque_enable` - Motor torque status (read/write, bool)
+- `on_status` - Wire on/ready status (read-only, bool)
+- `scan_status` - Scan in-progress status (read-only, optional)
+- `torque_enable` - Motor torque status (read/write, optional, bool)
 - `temperature` - RTD temperature reading (read-only, optional)
 - `install_angle` - Wire installation angle (read-only, degrees)
 
@@ -127,8 +130,8 @@ wire = create_wire(name="WS28144", area="L3")
 
 Some PVs are optional and may be `None` depending on wire scanner installation and configuration:
 - `beam_rate` - Substituted with global beam rate PVs in some areas
-- `temperature`, `torque_enable`, `homed` - Hardware-dependent features
-- `retract`, `initialize` - Available only on newer scanner models
+- `temperature`, `homed`, `torque_enable`, `scan_status` - Hardware-dependent features
+- `retract`, `initialize`, `initialize_status`, `enabled` - Available only on newer scanner models
 
 **Always check for `None`** before accessing optional PVs:
 
@@ -273,40 +276,40 @@ wire.retract()
 
 ## Validation and Safety
 
-### Pydantic Validation Models
+### Validator Functions
 
-The Device Layer uses Pydantic models to enforce type safety and business logic constraints:
+The Device Layer uses standalone validator functions to enforce type safety and business logic constraints:
 
-**`RangeModel`** - Validates scan ranges:
+**`validate_range`** - Validates scan ranges:
 ```python
 # Enforces:
 # 1. List length == 2
 # 2. First element < second element
 
-wire.x_range = [45000, 37000]  # Raises ValidationError
+wire.x_range = [45000, 37000]  # Raises ValueError
 wire.x_range = [37000, 45000]  # Valid
 ```
 
-**`PlaneModel`** - Validates plane identifiers:
+**`validate_plane`** - Validates plane identifiers:
 ```python
-# Enforces: plane ∈ {"X", "Y", "U"} (case-insensitive)
+# Enforces: plane ∈ {"x", "y", "u"} (case-insensitive)
 
-wire.use(plane="Z", val=True)  # Raises ValidationError
+wire.use(plane="Z", val=True)  # Raises ValueError
 wire.use(plane="x", val=True)  # Valid (case-insensitive)
 ```
 
-**`IntegerModel`** - Validates integer parameters:
+**`validate_integer`** - Validates integer parameters:
 ```python
 # Enforces strict integer types (no floats coerced)
 
 wire.motor = 42000      # Valid
-wire.motor = 42000.5    # Raises ValidationError
+wire.motor = 42000.5    # Raises ValueError
 ```
 
-**`BooleanModel`** - Validates boolean parameters:
+**`validate_boolean`** - Validates boolean parameters:
 ```python
 wire.use_x_wire = True  # Valid
-wire.use_x_wire = 1     # Raises ValidationError (strict bool)
+wire.use_x_wire = 1     # Raises ValueError (strict bool)
 ```
 
 ### State Checking
@@ -354,13 +357,15 @@ else:
 
 ### Purpose
 
-Associates wire scanner with downstream measurement devices:
+Associates wire scanner with downstream measurement devices and classification:
 
 ```python
 class WireMetadata(Metadata):
-    detectors: List[str]                # Required: data acquisition devices
-    bpms_before_wire: Optional[List[str]]  # Upstream BPMs
-    bpms_after_wire: Optional[List[str]]   # Downstream BPMs
+    detectors: List[str]                    # Required: data acquisition devices
+    default_detector: str                   # Primary detector for RMS extraction
+    tmitloss: Optional[TMITLossBPMs]        # Upstream/downstream BPMs for TMIT loss
+    type: str                               # Device type classification
+    wire_type: str                          # Wire type classification
 ```
 
 ### Detector Configuration
@@ -370,7 +375,7 @@ class WireMetadata(Metadata):
 - LBLM (Beam Loss Monitor) - measures scattered particles
 - TMIT Loss - measures beam loss as function of transmitted intensity using BPMs
 
-**Configuration Example** (from YAML):
+**Configuration Example** (from database):
 ```yaml
 WS28144:
   controls_information:
@@ -379,10 +384,14 @@ WS28144:
   metadata:
     detectors:
       - "PMT:LI29:150"
-    bpms_before_wire:
-      - "BPMS:LI28:401"
-    bpms_after_wire:
-      - "BPMS:LI28:501"
+    default_detector: "PMT:LI29:150"
+    tmitloss:
+      upstream:
+        - "BPMS:LI28:401"
+      downstream:
+        - "BPMS:LI28:501"
+    type: "wire"
+    wire_type: "standard"
 ```
 
 **Usage in Measurement Layer**:
@@ -417,7 +426,7 @@ class WireCollection(BaseModel):
 ### Creation and Access
 
 ```python
-from lcls_tools.common.devices.reader import create_wire_collection
+from slac_devices.reader import create_wire_collection
 
 # Load all wires from configuration
 collection = create_wire_collection()
@@ -451,7 +460,7 @@ This ensures `wire.name` always matches its collection key.
 ```python
 # Initialize all wires in a beampath
 for name, wire in collection.wires.items():
-    if wire.area == "LI28" and not wire.initialize_status:
+    if wire.area == "L3" and not wire.initialize_status:
         wire.initialize()
 ```
 
@@ -506,10 +515,10 @@ def beam_rate(self):
 ### Single Wire Scan Configuration
 
 ```python
-from lcls_tools.common.devices.reader import create_wire
+from slac_devices.reader import create_wire
 
 # 1. Create wire device
-wire = create_wire(area="LI28", name="WS28144")
+wire = create_wire(area="L3", name="WS28144")
 
 # 2. Check and initialize if needed
 if not wire.initialize_status:
@@ -727,6 +736,5 @@ else:
 
 ## Next Steps
 
-- **[03-measurement-layer.md](03-measurement-layer.md)**: Data collection, Gaussian fitting, and analysis
+- **[03-measurement-layer.md](03-measurement-layer.md)**: Data collection, Gaussian fitting, and analysis *(coming soon)*
 - **[01-architecture-overview.md](01-architecture-overview.md)**: System-wide architecture context
-- **API Reference**: Complete Wire class API documentation (future)

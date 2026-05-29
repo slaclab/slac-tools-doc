@@ -4,7 +4,7 @@
 
 **Audience**: Developers extending or maintaining wire scanner software
 
-**Last Updated**: March 6, 2026
+**Last Updated**: May 28, 2026
 
 ---
 
@@ -21,19 +21,21 @@ The Wire Scanner system is organized in four distinct layers, each with clear re
                               ↓
 ┌─────────────────────────────────────────────────────────────┐
 │                  Orchestration Layer (Level 3)              │
-│                   ws_suite.py (slacwire)                    │
+│               suite.py, view.py (slacwire)                  │
 │      WireScanSuite: run tracking, data mgmt, automation     │
+│      WireScanView: plotting and figure management           │
 └─────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────┐
 │                  Measurement Layer (Level 2)                │
-│         ws_collection.py, ws_analysis.py (lcls-tools)       │
+│        collection.py, analysis.py (slac-measurements)       │
+│  otf_collection.py, step_collection.py, scan.py            │
 │    Data collection, Gaussian fitting, RMS extraction        │
 └─────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────┐
 │                     Device Layer (Level 1)                  │
-│                  wire.py (lcls-tools)                       │
+│                  wire.py (slac-devices)                     │
 │         EPICS PV control, motion management, state          │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -43,7 +45,7 @@ The Wire Scanner system is organized in four distinct layers, each with clear re
 ## Layer 1: Device Layer
 
 ### Location
-`lcls_tools/common/devices/wire.py`
+`slac-devices/slac_devices/wire.py`
 
 ### Responsibility
 Low-level control of wire scanner hardware via EPICS Process Variables (PVs). Provides abstractions for:
@@ -70,10 +72,10 @@ Low-level control of wire scanner hardware via EPICS Process Variables (PVs). Pr
 ### Example Usage
 
 ```python
-from lcls_tools.common.devices.reader import create_wire
+from slac_devices.reader import create_wire
 
 # Create wire device
-wire = create_wire(area="LI28", name="WS28144")
+wire = create_wire(area="L3", name="WS28144")
 
 # Configure scan
 wire.use_x_wire = True
@@ -100,107 +102,159 @@ Exposes:
 ## Layer 2: Measurement Layer
 
 ### Location
-- `lcls_tools/common/measurements/ws_collection.py`
-- `lcls_tools/common/measurements/ws_analysis.py`
+- `slac-measurements/slac_measurements/wires/scan.py` (unified entry point)
+- `slac-measurements/slac_measurements/wires/collection.py` (base collection + factory)
+- `slac-measurements/slac_measurements/wires/otf_collection.py` (on-the-fly scan)
+- `slac-measurements/slac_measurements/wires/step_collection.py` (step scan)
+- `slac-measurements/slac_measurements/wires/analysis.py` (profile fitting and RMS extraction)
+- `slac-measurements/slac_measurements/wires/collection_results.py` (collection result types)
+- `slac-measurements/slac_measurements/wires/analysis_results.py` (analysis result types)
 
 ### Responsibility
-Orchestrates wire scanning and extracts beam profile information. Two sub-layers:
+Orchestrates wire scanning and extracts beam profile information via a two-stage pipeline:
 
-#### 2a. Data Collection (`ws_collection.py`)
+#### 2a. Data Collection (`collection.py`, `otf_collection.py`, `step_collection.py`)
 - Synchronizes wire motion with detector data acquisition
-- Manages BSA/EDEF buffer reservations
+- Manages timing buffer reservations
 - Returns raw position and detector arrays
 - Supports two scan modes: **on-the-fly** and **step**
 
-#### 2b. Data Analysis (`ws_analysis.py`)
+#### 2b. Data Analysis (`analysis.py`)
 - Organizes raw data by profile (X, Y, U planes)
-- Fits Gaussian curves to detector signals
+- Fits Gaussian curves (standard, asymmetric, or super-Gaussian)
 - Extracts RMS beam sizes
 - Transforms coordinates (stage → beam)
 
 ### Key Classes
 
-**`WireMeasurementCollection`** (data collection)
-- Constructor: `WireMeasurementCollection(beam_profile_device=wire, beampath="CU_HXR")`
-- Main method: `measure(scan_type="step") → WireMeasurementCollectionResult`
-- Workflow:
-  1. Reserve BSA buffer
-  2. Execute wire motion (OTF or step)
-  3. Synchronize data acquisition
-  4. Extract position + detector arrays
-  5. Release buffer
-  6. Return raw data + metadata
+**`WireBeamProfileMeasurement`** (unified entry point in `scan.py`)
+- Constructor: `WireBeamProfileMeasurement(beam_profile_device=wire, beampath="CU_HXR")`
+- Main method: `measure(scan_mode="otf", fitting_method="gaussian", rms_detector=None) → WireMeasurementAnalysisResult`
+- Composes collection + analysis in a single call
 
-**`WireMeasurementAnalysis`** (post-measurement)
-- Constructor: `WireMeasurementAnalysis(collection_result=raw_result)`
-- Main method: `analyze() → WireMeasurementAnalysisResult`
+**`BaseWireMeasurementCollection`** (abstract base in `collection.py`)
+- Constructor: created via `create_wire_collection(scan_mode, beam_profile_device, beampath)`
+- Main method: `measure() → WireMeasurementCollectionResult`
 - Workflow:
-  1. `get_profile_range_indices()` - Identify data for each profile
-  2. `organize_data_by_profile()` - Separate by X/Y/U
-  3. `fit_data_by_profile()` - Gaussian fitting per detector
-  4. `get_rms_sizes()` - Extract (x_rms, y_rms)
+  1. Reserve timing buffer
+  2. Create device dictionary (wire + detectors)
+  3. Create metadata
+  4. `_run_collection_scan()` - Mode-specific wire motion + buffer acquisition
+  5. `_get_data_from_buffer()` - Extract position + detector arrays
+  6. Release buffer
+  7. Return raw data + metadata
+
+**`OTFWireMeasurementCollection`** (on-the-fly scan)
+- Inherits from `BaseWireMeasurementCollection`
+- Starts wire scan via `start_scan()`, then acquires buffer while wire moves continuously
+
+**`StepWireMeasurementCollection`** (step scan)
+- Inherits from `BaseWireMeasurementCollection`
+- Initializes wire, starts buffer, moves to discrete positions sequentially, retracts, waits for buffer completion
+
+**`WireMeasurementAnalysis`** (post-collection analysis)
+- Constructor: `WireMeasurementAnalysis(collection_result=raw_result, fitting_method="gaussian")`
+- Main method: `analyze(rms_detector=None) → WireMeasurementAnalysisResult`
+- Workflow:
+  1. `_get_profile_range_indices()` - Identify data for each profile
+  2. `_organize_data_by_profile()` - Separate by X/Y/U
+  3. `_fit_data_by_profile()` - Gaussian fitting per detector
+  4. `_get_rms_sizes()` - Extract (x_rms, y_rms)
 
 ### Data Structures
 
-**Collection Results** (raw data):
+**Collection Result** (raw data):
 ```python
 WireMeasurementCollectionResult:
-    raw_data: dict          # {device_name: numpy array}
-    metadata: MeasurementMetadata  # Wire name, detectors, ranges, etc.
+    raw_data: dict[str, Any]        # {device_name: numpy array}
+    metadata: MeasurementMetadata   # Wire name, detectors, ranges, etc.
 ```
 
-**Analysis Results** (fitted data):
+**Analysis Result** (fitted data):
 ```python
 WireMeasurementAnalysisResult:
-    rms_sizes: tuple        # (x_rms, y_rms) in microns
-    fit_result: dict        # {profile: FitResult}
-    profiles: dict          # {profile: ProfileMeasurement}
-    collection_result: WireMeasurementCollectionResult  # Embedded raw
+    fit_result: dict[str, FitResult]                    # {profile: FitResult}
+    rms_sizes: Optional[NDArrayAnnotatedType]           # (x_rms, y_rms) in microns
+    collection_result: WireMeasurementCollectionResult   # Embedded raw data
+    profiles: dict[str, ProfileMeasurement]             # Organized profile data
+    metadata: MeasurementMetadata
 ```
 
-### Scan Type Selection Logic
+**Supporting Types**:
+```python
+FitResult:
+    detectors: dict[str, DetectorFit]  # {detector_name: fit parameters}
 
-**On-The-Fly (OTF)**:
-- Wire moves continuously
-- Buffer acquires during motion
-- Optimal: 120 Hz < beam_rate ≤ 16 kHz
+DetectorFit:
+    mean: float        # Centroid position
+    sigma: float       # RMS beam size (microns)
+    amplitude: float   # Peak amplitude
+    offset: float      # Baseline offset
+    curve: ndarray     # Fitted Gaussian curve
+    positions: ndarray # Position array
 
-**Step Scan**:
-- Wire moves to discrete positions
-- Buffer acquires during motion
-- Required: beam_rate ≤ 120 Hz
+ProfileMeasurement:
+    positions: ndarray                              # Wire positions for this profile
+    detectors: dict[str, DetectorProfileMeasurement]  # Detector data arrays
+    profile_indices: ndarray                        # Index array within full scan
+```
+
+### Scan Mode Selection
+
+Scan mode is selected via the `scan_mode` parameter, which dispatches to the appropriate collection class via `create_wire_collection()`:
+
+| `scan_mode` | Collection Class | Motion | Use Case |
+|-------------|-----------------|--------|----------|
+| `"otf"` | `OTFWireMeasurementCollection` | Continuous | Standard beam rates |
+| `"step"` | `StepWireMeasurementCollection` | Step-and-settle | Low-rate / discrete scans |
 
 ### Example Usage
 
 ```python
-from lcls_tools.common.measurements.ws_collection import WireMeasurementCollection
-from lcls_tools.common.measurements.ws_analysis import WireMeasurementAnalysis
+from slac_measurements.wires import WireBeamProfileMeasurement
 
-# Collection
-collection = WireMeasurementCollection(
+# Unified measurement (collection + analysis)
+measurement = WireBeamProfileMeasurement(
     beam_profile_device=wire,
     beampath="CU_HXR"
 )
-raw_result = collection.measure(scan_type="step")
-
-# Analysis
-analyzer = WireMeasurementAnalysis(collection_result=raw_result)
-analysis_result = analyzer.analyze()
+result = measurement.measure(scan_mode="otf")
 
 # Access results
-x_rms, y_rms = analysis_result.rms_sizes  # Beam sizes in microns
+x_rms, y_rms = result.rms_sizes  # Beam sizes in microns
 print(f"X: {x_rms:.1f} µm, Y: {y_rms:.1f} µm")
 
 # Access fits
-x_fits = analysis_result.fit_result['x']  # FitResult for X profile
+x_fits = result.fit_result['x']  # FitResult for X profile
 for detector, fit in x_fits.detectors.items():
     print(f"{detector}: mean={fit.mean}, sigma={fit.sigma}")
+
+# Save to HDF5
+result.save_to_h5("/path/to/output.h5")
+
+# --- Or use collection + analysis separately ---
+from slac_measurements.wires.collection import create_wire_collection
+from slac_measurements.wires.analysis import WireMeasurementAnalysis
+
+collection = create_wire_collection(
+    scan_mode="step",
+    beam_profile_device=wire,
+    beampath="CU_HXR",
+)
+raw_result = collection.measure()
+
+analyzer = WireMeasurementAnalysis(
+    collection_result=raw_result,
+    fitting_method="gaussian",
+)
+analysis_result = analyzer.analyze(rms_detector="PMT")
 ```
 
 ### Interface to Layer 3
 Exposes:
-- `measure()` method → results with raw/analyzed data
-- Result objects serializable to HDF5
+- `WireBeamProfileMeasurement.measure()` → unified result
+- Separate `create_wire_collection()` + `WireMeasurementAnalysis` for advanced workflows
+- Result objects serializable to HDF5 via `save_to_h5()`
 - Metadata for tracking and plotting
 - RMS sizes, fit parameters, profiles
 
@@ -209,83 +263,109 @@ Exposes:
 ## Layer 3: Orchestration Layer
 
 ### Location
-`slacwire/ws_suite.py`
+- `slacwire/suite.py` (scan orchestration)
+- `slacwire/view.py` (plotting and figure management)
+- `slacwire/registry/registry.py` (run tracking)
 
 ### Responsibility
 Provides programmatic API for batch/automated scanning with:
 - Run tracking and versioning
 - Automated data persistence (HDF5)
-- Plot generation and saving
+- Plot generation and saving (delegated to `WireScanView`)
 - Scan workflow management
 - Result caching and retrieval
 
-### Key Class
+### Key Classes
 
 **`WireScanSuite`** (dataclass)
-- Constructor: `WireScanSuite(wires=["WS28144:L3"], beampath="CU_HXR")`
-- Main method: `run(do_otf=False, do_step=True, save=True, save_plots=True)`
+- Constructor: `WireScanSuite(wires=["WS28144"], beampath="CU_HXR")`
+- Main methods: `run_single(wire, scan_mode="otf")`, `run_all(scan_mode="otf")`
+
+**`WireScanView`** (plotting)
+- Provides `render()`, `draw_trajectory()`, `draw_profile()`, `plot_trajectory()`, `plot_profile()`
+- Handles both standalone figure creation and in-place GUI canvas rendering
+
+**`RunRegistry`** (dataclass)
+- Persistent JSON-backed run log
+- Provides `log()` method to record each scan
 
 ### Internal Architecture
 
 **State Management**:
 ```python
-run_counter: int                    # Incremental run ID
-run_registry: List[dict]            # Metadata per run
-results: Dict[str, List[Result]]    # Keyed by wire name
-devices: Dict[str, Wire]            # Cached device objects
+results: dict                       # {wire_name: List[Result]}
+devices: dict                       # {wire_name: Wire} cached device objects
+registry: RunRegistry               # Persistent run tracking
+view: WireScanView                  # Plotting (created in __post_init__)
 ```
 
 **Workflow Methods**:
-- `_run_otf()` - Execute single OTF scan
-- `_run_step()` - Execute single step scan
-- `_latest_run(wire_name)` - Get most recent result for wire
+- `run_single(wire, scan_mode="otf", rms_detector=None)` - Execute single wire scan
+- `run_all(scan_mode="otf", rms_detector=None)` - Run all configured wires
+- `collect_single(wire, scan_mode="otf")` - Collect raw data without analysis
+- `_run_device_scan(device, method, scan_fn, rms_detector, file_prefix)` - Common scan flow
+- `_measure(device, scan_mode, collect_only=False, rms_detector=None)` - Create and execute measurement
 
-**Persistence Methods**:
-- `save_run(data, filename)` - HDF5 serialization
-- `save_fig(fig, name)` - PNG export
+**Persistence**:
 - Uses dated directory structure: `/u1/lcls/physics/data/wire_scan/YYYY/MM/DD/`
+- HDF5 serialization via `result.save_to_h5()`
+- Plot export via `view.render()`
 
-**Plotting Methods**:
-- `plot_trajectory(result)` - Position vs time
-- `plot_profile(result, detector, profile)` - Beam profile with Gaussian fit
+**Plotting** (via `self.view`):
+- `view.render(data, wire, detector, profiles, ...)` - Generate trajectory + profile plots
+- `view.draw_trajectory(fig, data, wire, detector)` - Render into existing figure (GUI)
+- `view.draw_profile(fig, data, wire, detector, profile)` - Render into existing figure (GUI)
 
 ### Example Usage
 
 ```python
-from slacwire.ws_suite import WireScanSuite
+from slacwire import WireScanSuite
 
 # Single wire
 suite = WireScanSuite(
-    wires=["WS28144:L3"],
+    wires=["WS28144"],
     beampath="CU_HXR"
 )
-suite.run(do_otf=True, save=True, save_plots=True)
+suite.run_single("WS28144", scan_mode="otf")
 
 # Access results
-latest = suite._latest_run("WS28144")  # Most recent
+latest = suite.latest_run("WS28144")  # Most recent
 x_rms, y_rms = latest.rms_sizes  # Beam sizes in microns
+
+# Run all configured wires
+suite.run_all(scan_mode="otf")
+
+# Regenerate plots without re-scanning
+suite.replot("WS28144")
+
+# Print summary of all latest results
+suite.summary()
 ```
 
 ### Run Registry
 
-Each `run()` invocation creates a registry entry:
+Each scan invocation creates a registry entry (persisted to JSON):
 ```python
 {
     'run_id': 1,
-    'timestamp': '2026-03-06 14:30:00',
-    'method': 'step',
+    'timestamp': '20260306_143000',
+    'method': 'otf',
     'wire': 'WS28144',
-    'filepath': '/u1/.../Step_WS28144_20260306_143000.h5',
-    'plots': ['/u1/.../Step_Profile_x_WS28144_20260306_143000.png', ...],
-    'status': 'ok'
+    'beampath': 'CU_HXR',
+    'detector': 'PMT:LI29:150',
+    'filepath': '/u1/.../OTF_WS28144_20260306_143000.h5',
+    'scope_data': '/u1/.../scope_WS28144_20260306_143000.csv',
+    'plots': ['/u1/.../OTF_Profile_x_WS28144_20260306_143000.png', ...],
+    'status': 'ok',
+    'error': None
 }
 ```
 
 ### Interface to Layer 4
 Exposes:
-- High-level `run()` method with multiple scan modes
-- Result caching for GUI display
-- Plot generation for GUI integration
+- `run_single()` / `run_all()` methods with scan mode selection
+- Result caching for GUI display via `latest_run()`
+- In-place plot rendering for GUI canvases via `view.draw_trajectory()` / `view.draw_profile()`
 - Registry for run history tracking
 
 ---
@@ -324,17 +404,9 @@ Provides operator interface with:
   - `scan_complete(wire_name, method, data, entry)` - Success
   - `scan_failed(wire_identifier, error_message)` - Error
 
-### Automatic Scan Type Selection
+### Scan Mode
 
-GUI automatically chooses scan type based on beam rate:
-```python
-if beam_rate <= 120:
-    scan_type = "step"
-elif 120 < beam_rate <= 16000:
-    scan_type = "on_the_fly"
-else:
-    raise ValueError("Beam rate too high")
-```
+The GUI currently uses a fixed scan mode (`"otf"`) passed to `WireScanSuite.run_single()`. Scan mode selection is not yet automated based on beam rate.
 
 ### Signal Flow Example
 
@@ -351,9 +423,9 @@ User clicks "Start Scan"
          ↓
 WireScanSuiteThread created and started
          ↓
-Thread runs WireMeasurementCollection internally
+Thread runs WireScanSuite.run_single() internally
          ↓
-scan_complete signal emitted
+scan_complete signal emitted (wire_name, method, data, entry)
          ↓
 PlotWidget updated with new data
          ↓
@@ -363,9 +435,10 @@ TextLoggerWidget shows "Scan complete"
 ### Integration with Layer 3
 
 GUI uses `WireScanSuite` for:
-- Automated run tracking
-- Consistent file naming
-- Plot generation
+- Automated run tracking via `run_single()`
+- Consistent file naming and dated output directories
+- In-place plot rendering via `view.draw_trajectory()` / `view.draw_profile()`
+- Registry-based run history
 - eLog submission preparation
 
 ## Data Flow Through All Layers
@@ -377,32 +450,32 @@ Layer 1 (Device):
   Wire device initialized, ranges set, wire profiles selected
          ↓
 Layer 2a (Collection):
-  WireMeasurementCollection.measure()
-    - Reserve buffer
-    -- wire.start_scan() for on-the-fly scans [call to Layer 1]
-    -- wire.motor setter for step scans [call to Layer 1]
-    - Synchronize acquisition
-    - Extract raw data
+  create_wire_collection(scan_mode, ...).measure()
+    - Reserve timing buffer
+    - _run_collection_scan() → wire.start_scan() [call to Layer 1]
+    - _get_data_from_buffer() → extract raw data
+    - Release buffer
     → WireMeasurementCollectionResult
          ↓
 Layer 2b (Analysis):
-  WireMeasurementAnalysis.analyze()
-    - Organize by profile
-    - Fit Gaussians
-    - Extract RMS
+  WireMeasurementAnalysis(collection_result=...).analyze()
+    - _get_profile_range_indices() → identify profiles
+    - _organize_data_by_profile() → separate by X/Y/U
+    - _fit_data_by_profile() → Gaussian fitting
+    - _get_rms_sizes() → extract (x_rms, y_rms)
     → WireMeasurementAnalysisResult
          ↓
 Layer 3 (Orchestration):
-  WireScanSuite.run()
-    - Call Layer 2
-    - Save to HDF5
-    - Generate plots
-    - Update run registry
+  WireScanSuite.run_single()
+    - _run_device_scan() calls Layer 2 via WireBeamProfileMeasurement
+    - Save to HDF5 via result.save_to_h5()
+    - Generate plots via view.render()
+    - Update run registry via registry.log()
     → Persisted data + cached results
          ↓
 Layer 4 (GUI):
   Display results
-    - Update plot canvas
+    - Update plot canvas via view.draw_trajectory() / draw_profile()
     - Show RMS values
     - Log to text widget
     - Optional eLog submission
@@ -421,17 +494,17 @@ def start_scan(self):
 
 **Layer 2**: Raises explicit exceptions
 ```python
-if not self._validate_position_data(positions):
-    raise RuntimeError("Position data invalid")
+if not self._wait_until(lambda: wire.initialize_status, timeout=10):
+    raise RuntimeError("Wire initialization failed")
 ```
 
-**Layer 3**: Catches and logs, continues with other wires
+**Layer 3**: Catches and logs, records error in registry
 ```python
 try:
-    result = collection.measure()
+    result = measurement.measure()
 except Exception as e:
-    self.logger.error(f"Scan failed: {e}")
-    continue  # Process other wires
+    self.registry.log(..., status="error", error=str(e))
+    logger.error(f"Scan failed: {e}")
 ```
 
 **Layer 4**: Displays user-friendly messages
@@ -464,7 +537,7 @@ Dependencies flow downward only:
 ## Key Takeaways
 
 1. **Wire Scanner is a 4-layer system** - Device → Measurement → Orchestration → GUI
-2. **Each layer is independently testable** 
+2. **Each layer is independently testable**
 3. **Data flows downward through calls, upward through return values** - No callbacks
 4. **Results are immutable** - Once created, never modified (enables caching)
 
@@ -472,8 +545,7 @@ Dependencies flow downward only:
 
 ## Related Documentation
 
-- [Device Layer Deep Dive](02-device-layer.md) *(coming soon)*
-- [Measurement Layer Deep Dive](03-measurement-layer.md) *(coming soon)*
-- [Suite Layer Deep Dive](04-suite-layer.md) *(coming soon)*
-- [GUI Development Guide](05-gui-layer.md) *(coming soon)*
-- [Testing Strategy](../08-testing-strategy.md) *(coming soon)*
+- [Device Layer Deep Dive](02-device-layer.md)
+- [Measurement Layer Deep Dive](03-measurement-layer.md)
+- [Suite Layer Deep Dive](04-suite-layer.md)
+- [GUI Development Guide](05-gui-layer.md)
