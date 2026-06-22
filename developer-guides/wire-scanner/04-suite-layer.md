@@ -4,7 +4,7 @@
 
 **Audience**: Developers extending scan workflows, adding new output formats, or integrating suite functionality into higher-level tools
 
-**Last Updated**: May 29, 2026
+**Last Updated**: June 18, 2026
 
 ---
 
@@ -13,7 +13,7 @@
 ```
 Layer 4 (GUI)          ← calls suite.run_single(), view.draw_*()
        ↓
-Layer 3 (Suite)        ← THIS LAYER: orchestration, persistence, plotting
+Layer 3 (Suite)        ← THIS LAYER: orchestration, persistence, plotting, diagnostics
        ↓
 Layer 2 (Measurement)  ← WireBeamProfileMeasurement.measure()
        ↓
@@ -32,9 +32,16 @@ The Suite layer transforms raw measurement primitives into a production data acq
 
 ## Components
 
-| File | Class | Responsibility |
+| File | Class / Role | Responsibility |
 |------|-------|---------------|
-| `slacwire/suite.py` | `WireScanSuite` | Scan orchestration, device management, file I/O |
+| `slacwire/suite/__init__.py` | `WireScanSuite` | Composed dataclass assembling all mixins |
+| `slacwire/suite/_base.py` | `WireScanSuiteBase` | Dataclass fields, `__post_init__`, device management |
+| `slacwire/suite/_run.py` | `RunMixin` | `run_single`, `run_all` (collection + analysis + persist) |
+| `slacwire/suite/_collect.py` | `CollectMixin` | `collect_single` (raw data without analysis) |
+| `slacwire/suite/_motion.py` | `MotionTestMixin` | `motion_test` (beam-less motion validation) |
+| `slacwire/suite/_results.py` | `ResultsMixin` | `latest_run`, `replot`, `summary` |
+| `slacwire/suite/_diagnostics.py` | `DiagnosticsMixin` | `cache_info`, `cache_pvs`, `cache_summary` |
+| `slacwire/suite/_constants.py` | — | `WIRE_AREA_LOOKUP`, `Beampath` type, path utilities |
 | `slacwire/view.py` | `WireScanView` | Plot generation (standalone figures and in-place GUI rendering) |
 | `slacwire/registry/registry.py` | `RunRegistry` | Persistent JSON audit trail of all scan runs |
 
@@ -42,9 +49,19 @@ The Suite layer transforms raw measurement primitives into a production data acq
 
 ## WireScanSuite
 
-### Construction
+### Composition Architecture
 
-`WireScanSuite` is a `@dataclass` that performs setup in `__post_init__`:
+`WireScanSuite` is a `@dataclass` composed from separate mixin classes via multiple inheritance:
+
+```python
+@dataclass
+class WireScanSuite(DiagnosticsMixin, MotionTestMixin, CollectMixin, RunMixin, ResultsMixin, WireScanSuiteBase):
+    pass
+```
+
+Each mixin adds a focused set of methods. The base class (`WireScanSuiteBase`) holds all dataclass fields and infrastructure. MRO ensures `__post_init__` runs from the base.
+
+### Construction
 
 ```python
 from slacwire import WireScanSuite
@@ -59,7 +76,7 @@ suite = WireScanSuite(
 )
 ```
 
-On construction:
+On construction (`__post_init__` in `_base.py`):
 1. `_build_devices()` — creates `Wire` device instances via `create_wire(area, name)` for every wire in the list
 2. `_build_view()` — instantiates a `WireScanView` for plotting
 3. Output directories are created: `outdir` (dated) and `plotdir` (outdir/plots)
@@ -83,7 +100,7 @@ On construction:
 
 ### Public Methods
 
-#### `run_single(wire, scan_mode="otf", rms_detector=None)`
+#### `run_single(wire, scan_mode="otf", rms_detector=None)` — `_run.py`
 
 Execute a complete scan for one wire: collection → analysis → save → plot → registry.
 
@@ -92,7 +109,7 @@ suite.run_single("WS28144", scan_mode="otf")
 suite.run_single("WS27644", scan_mode="step", rms_detector="PMT27650")
 ```
 
-#### `run_all(scan_mode="otf", rms_detector=None)`
+#### `run_all(scan_mode="otf", rms_detector=None)` — `_run.py`
 
 Run all configured wires sequentially in the given scan mode.
 
@@ -100,7 +117,7 @@ Run all configured wires sequentially in the given scan mode.
 suite.run_all(scan_mode="otf")
 ```
 
-#### `collect_single(wire, scan_mode="otf")`
+#### `collect_single(wire, scan_mode="otf")` — `_collect.py`
 
 Collect raw data without analysis. Useful for debugging or when custom post-processing is needed.
 
@@ -109,7 +126,16 @@ suite.collect_single("WS28144", scan_mode="step")
 raw_data = suite.latest_run("WS28144")  # collection-only result
 ```
 
-#### `latest_run(wire) → result`
+#### `motion_test(wire, scan_mode="otf", plot=True)` — `_motion.py`
+
+Run beam-less motion validation for a single wire. Exercises the wire motion without requiring beam to verify mechanical behavior.
+
+```python
+result = suite.motion_test("WS28144", scan_mode="otf")
+result = suite.motion_test("WS28144", scan_mode="step", plot=False)
+```
+
+#### `latest_run(wire) → result` — `_results.py`
 
 Retrieve the most recent result for a wire. Raises `KeyError` if no results exist.
 
@@ -118,7 +144,7 @@ result = suite.latest_run("WS28144")
 x_rms, y_rms = result.rms_sizes
 ```
 
-#### `replot(wire, detector=None) → list[Path]`
+#### `replot(wire, detector=None) → list[Path]` — `_results.py`
 
 Regenerate plots from cached results without re-scanning.
 
@@ -126,7 +152,7 @@ Regenerate plots from cached results without re-scanning.
 paths = suite.replot("WS28144")
 ```
 
-#### `summary()`
+#### `summary()` — `_results.py`
 
 Print a formatted table of latest results for all wires with sigma values.
 
@@ -138,6 +164,16 @@ suite.summary()
 #   Latest  |  20260529_140000  |  otf  |  detector: PMT29150
 #     x :  σ =    42.3 µm
 #     y :  σ =    38.7 µm
+```
+
+#### `cache_info()` / `cache_pvs()` / `cache_summary()` — `_diagnostics.py`
+
+EPICS Channel Access cache inspection for debugging PV connection issues.
+
+```python
+suite.cache_summary()    # Print formatted summary
+info = suite.cache_info()  # Get dict with context, counts, per-device breakdown
+pvs = suite.cache_pvs()    # Get actual PV names grouped by device
 ```
 
 ### Internal Scan Flow (`_run_device_scan`)
@@ -166,7 +202,7 @@ _run_device_scan(device, method, scan_fn, rms_detector, file_prefix)
 
 ### Wire-to-Area Resolution
 
-`WireScanSuite` maps wire names to accelerator areas via the `WIRE_AREA_LOOKUP` dict:
+`WireScanSuite` maps wire names to accelerator areas via the `WIRE_AREA_LOOKUP` dict in `_constants.py`:
 
 | Wire Pattern | Area |
 |-------------|------|
@@ -182,7 +218,7 @@ _run_device_scan(device, method, scan_fn, rms_detector, file_prefix)
 | `WS31`–`WS34` | LTUH |
 | `WS31B`–`WS34B` | LTUS |
 
-To add a new wire, add an entry to `WIRE_AREA_LOOKUP` in `suite.py`.
+To add a new wire, add an entry to `WIRE_AREA_LOOKUP` in `suite/_constants.py`.
 
 ### File Output Structure
 
@@ -317,7 +353,7 @@ entry = registry.log(
 
 ---
 
-## Integration with Layer 5 (GUI)
+## Integration with Layer 4 (GUI)
 
 The GUI layer uses the suite through these integration points:
 
@@ -334,9 +370,9 @@ The GUI runs scans on a `QThread` and receives results via Qt signals. The view'
 
 ---
 
-## Integration with Layer 3 (Measurement)
+## Integration with Layer 2 (Measurement)
 
-The suite delegates all scan execution to Layer 3 via a single integration point:
+The suite delegates all scan execution to Layer 2 via a single integration point:
 
 ```python
 def _measure(self, device, scan_mode, collect_only=False, rms_detector=None):
@@ -358,7 +394,7 @@ The suite does not directly instantiate collection or analysis classes — it us
 
 ### Adding a New Wire
 
-Add an entry to `WIRE_AREA_LOOKUP` in `suite.py`:
+Add an entry to `WIRE_AREA_LOOKUP` in `suite/_constants.py`:
 
 ```python
 WIRE_AREA_LOOKUP = {
@@ -367,10 +403,17 @@ WIRE_AREA_LOOKUP = {
 }
 ```
 
+### Adding a New Mixin (New Feature Area)
+
+1. Create `suite/_feature.py` with a mixin class (e.g., `FeatureMixin`)
+2. Methods can access `self.devices`, `self.view`, `self.results`, etc. from the base
+3. Import and add the mixin to the `WireScanSuite` class in `suite/__init__.py`
+4. Export any new public names in `__all__`
+
 ### Adding a New Scan Mode
 
 1. Implement the mode in Layer 2 (`slac_measurements/wires/`)
-2. Add it to the `mode not in (...)` validation in `run_single` and `collect_single`
+2. Add it to the `mode not in (...)` validation in `_run.py` and `_collect.py`
 3. Choose a `file_prefix` for the new mode
 
 ### Adding a New Plot Type
@@ -393,9 +436,9 @@ suite = WireScanSuite(
 
 ## Design Decisions
 
-### Why a dataclass?
+### Why a dataclass composed from mixins?
 
-`WireScanSuite` holds mutable state (results, devices) that accumulates over a session. A dataclass with `field(default_factory=...)` provides clean initialization with sensible defaults while remaining lightweight.
+`WireScanSuite` holds mutable state (results, devices) that accumulates over a session. A dataclass with `field(default_factory=...)` provides clean initialization with sensible defaults while remaining lightweight. The mixin decomposition keeps each concern in its own file, making it easy to locate and extend behavior without navigating a large monolithic module.
 
 ### Why separate View from Suite?
 

@@ -4,20 +4,20 @@
 
 **Audience**: Developers adding GUI features, modifying widget behavior, or debugging operator-facing issues
 
-**Last Updated**: May 29, 2026
+**Last Updated**: June 18, 2026
 
 ---
 
 ## Role in the Architecture
 
 ```
-Layer 5 (GUI)          ← THIS LAYER: operator interface, threading, PyDM/EPICS binding
+Layer 4 (GUI)          ← THIS LAYER: operator interface, threading, PyDM/EPICS binding
        ↓
-Layer 4 (Suite)        ← WireScanSuite.run_single(), WireScanView.draw_*()
+Layer 3 (Suite)        ← WireScanSuite.run_single(), WireScanView.draw_*()
        ↓
-Layer 3 (Measurement)  ← WireBeamProfileMeasurement.measure()
+Layer 2 (Measurement)  ← WireBeamProfileMeasurement.measure()
        ↓
-Layer 2 (Device)       ← Wire EPICS control via LazyPV
+Layer 1 (Device)       ← Wire EPICS control via LazyPV
 ```
 
 The GUI layer translates operator interactions (select wire, click scan, view results) into suite-level method calls and renders results back to the user. It adds:
@@ -310,7 +310,7 @@ Two output targets for the `"wire_scan_logger"`:
 1. **File** — written to `{outdir}/WireScanLog-YYYY-MM-DD.txt`
 2. **Status widget** — the `QTextEdit` in the Scan group, updated in real-time via `QTextEditLogger`
 
-The logger is shared with the suite layer — `suite.py` and `registry.py` log to the same `"wire_scan_logger"` name, so their messages appear in the GUI status area.
+The logger is shared with the suite layer — the `suite/` modules and `registry.py` log to the same `"wire_scan_logger"` name, so their messages appear in the GUI status area.
 
 Attempts to use `lcls_tools.common.logger.file_logger.custom_logger` first; falls back to a basic `logging.FileHandler` if that package isn't available.
 
@@ -359,7 +359,7 @@ from slacwire.ws_gui import WireScanSuiteGUI
 ### Adding a New Beampath/Wire
 
 1. Add entries to `wire_scan_gui.yaml`
-2. Ensure the wire name exists in `WIRE_AREA_LOOKUP` in `suite.py`
+2. Ensure the wire name exists in `WIRE_AREA_LOOKUP` in `suite/_constants.py`
 3. No code changes needed — navigation is data-driven
 
 ---

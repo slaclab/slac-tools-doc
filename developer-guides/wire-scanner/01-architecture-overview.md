@@ -4,7 +4,7 @@
 
 **Audience**: Developers extending or maintaining wire scanner software
 
-**Last Updated**: May 28, 2026
+**Last Updated**: June 18, 2026
 
 ---
 
@@ -21,7 +21,7 @@ The Wire Scanner system is organized in four distinct layers, each with clear re
                               ↓
 ┌─────────────────────────────────────────────────────────────┐
 │                  Orchestration Layer (Level 3)              │
-│               suite.py, view.py (slacwire)                  │
+│              suite/, view.py (slacwire)                      │
 │      WireScanSuite: run tracking, data mgmt, automation     │
 │      WireScanView: plotting and figure management           │
 └─────────────────────────────────────────────────────────────┘
@@ -263,7 +263,7 @@ Exposes:
 ## Layer 3: Orchestration Layer
 
 ### Location
-- `slacwire/suite.py` (scan orchestration)
+- `slacwire/suite/` (scan orchestration — mixin-based sub-package)
 - `slacwire/view.py` (plotting and figure management)
 - `slacwire/registry/registry.py` (run tracking)
 
@@ -274,12 +274,15 @@ Provides programmatic API for batch/automated scanning with:
 - Plot generation and saving (delegated to `WireScanView`)
 - Scan workflow management
 - Result caching and retrieval
+- Beam-less motion validation tests
+- EPICS CA cache diagnostics
 
 ### Key Classes
 
-**`WireScanSuite`** (dataclass)
+**`WireScanSuite`** (dataclass, composed from mixins)
 - Constructor: `WireScanSuite(wires=["WS28144"], beampath="CU_HXR")`
 - Main methods: `run_single(wire, scan_mode="otf")`, `run_all(scan_mode="otf")`
+- Composed from: `WireScanSuiteBase`, `RunMixin`, `CollectMixin`, `ResultsMixin`, `MotionTestMixin`, `DiagnosticsMixin`
 
 **`WireScanView`** (plotting)
 - Provides `render()`, `draw_trajectory()`, `draw_profile()`, `plot_trajectory()`, `plot_profile()`
@@ -289,9 +292,23 @@ Provides programmatic API for batch/automated scanning with:
 - Persistent JSON-backed run log
 - Provides `log()` method to record each scan
 
+### Suite Sub-Package Structure
+
+```
+suite/
+├── __init__.py        # Composes WireScanSuite from all mixins
+├── _base.py           # Dataclass fields, __post_init__, device management
+├── _run.py            # run_single, run_all (collection + analysis)
+├── _collect.py        # collect_single (raw data, no analysis)
+├── _motion.py         # motion_test (beam-less validation)
+├── _results.py        # latest_run, replot, summary
+├── _diagnostics.py    # cache_info, cache_pvs, cache_summary
+└── _constants.py      # WIRE_AREA_LOOKUP, Beampath, paths
+```
+
 ### Internal Architecture
 
-**State Management**:
+**State Management** (in `_base.py`):
 ```python
 results: dict                       # {wire_name: List[Result]}
 devices: dict                       # {wire_name: Wire} cached device objects
@@ -300,11 +317,12 @@ view: WireScanView                  # Plotting (created in __post_init__)
 ```
 
 **Workflow Methods**:
-- `run_single(wire, scan_mode="otf", rms_detector=None)` - Execute single wire scan
-- `run_all(scan_mode="otf", rms_detector=None)` - Run all configured wires
-- `collect_single(wire, scan_mode="otf")` - Collect raw data without analysis
-- `_run_device_scan(device, method, scan_fn, rms_detector, file_prefix)` - Common scan flow
-- `_measure(device, scan_mode, collect_only=False, rms_detector=None)` - Create and execute measurement
+- `run_single(wire, scan_mode="otf", rms_detector=None)` - Execute single wire scan (`_run.py`)
+- `run_all(scan_mode="otf", rms_detector=None)` - Run all configured wires (`_run.py`)
+- `collect_single(wire, scan_mode="otf")` - Collect raw data without analysis (`_collect.py`)
+- `motion_test(wire, scan_mode="otf", plot=True)` - Beam-less motion validation (`_motion.py`)
+- `latest_run(wire)`, `replot(wire)`, `summary()` - Result access (`_results.py`)
+- `cache_info()`, `cache_pvs()`, `cache_summary()` - EPICS diagnostics (`_diagnostics.py`)
 
 **Persistence**:
 - Uses dated directory structure: `/u1/lcls/physics/data/wire_scan/YYYY/MM/DD/`
