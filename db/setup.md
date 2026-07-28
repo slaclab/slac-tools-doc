@@ -55,8 +55,8 @@ import slac_db.create
 slac_db.create.device_db()
 ```
 
-## Additional Meatadata
-You might want to include additional meatadata for your devices. We only have one way of doing that for the time being. The file `slac_db/package_data/wire_metadata.yaml` indexes additonal metadata by device name. The file name is legacy because the Wire Scanner developer was the main user of this file.
+## Additional Metadata
+You might want to include additional metadata for your devices. We only have one way of doing that for the time being. The file `slac_db/package_data/wire_metadata.yaml` indexes additonal metadata by device name. The file name is legacy because the Wire Scanner developer was the main user of this file.
 
 For example:
 ``` yaml
