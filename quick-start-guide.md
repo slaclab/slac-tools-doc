@@ -44,8 +44,6 @@ git commit -m "Short description of your change"
 git push origin <branch-name>
 ```
 
-For help writing good commit messages, see [GitHub's commit guidance](https://docs.github.com/en/get-started/using-git/about-git#example-contribute-to-an-existing-repository).
-
 ## Opening a pull request (PR)
 
 When you are ready to merge your code into the main branch, open a pull request. Linting and test workflows will automatically run on your code. One review and approval is required before merging.
