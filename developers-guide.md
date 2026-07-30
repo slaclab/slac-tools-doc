@@ -1,6 +1,6 @@
 # slac-tools Developers Guide
 
-This page is meant to help existing and new high level applications (HLA) developers of [slac-tools](https://github.com/slaclab/slac-tools). Contributions are welcome. To update this or other documents on slac-tools-doc, please try to follow these steps:
+This page is meant to help existing high level applications (HLA) developers of [slac-tools](https://github.com/slaclab/slac-tools). Contributions are welcome. To update this or other documents on slac-tools-doc, please try to follow these steps:
 1. Find or write an issue related to your changes.
 2. Start a branch from that issue page.
 3. Update the branch with your changes.
@@ -26,10 +26,6 @@ New dependancies should meet the following requirements:
 Whether you develop on your local laptop or SLAC dev systems, please try to develop code on branches that are associated with issues. You can create a branch from an issue on the lower right hand side of the issue page. 
 
 <img width="1732" height="938" alt="create-issue-branch" src="https://github.com/user-attachments/assets/99257d5b-52ee-421c-8ea9-495c616f2be5" />
-
-## Pull requests (PR)
-
-When you are ready to merge your code into the main branch, open a pull request. Linting and test workflows will automatically run on your code. One review and approval is required before merging. 
 
 ## Linting 
 TODO: package, how to install/run locally
