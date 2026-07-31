@@ -10,7 +10,7 @@ These steps should be followed when contributing to [slac-tools](https://github.
 
 ## Python versions 
 
-By default, we support stable versions of Python (not feature versions). As versions are declared end of life by [python.org](https://www.python.org/downloads/), tests and workflows should be updated accordingly. 
+By default, we support stable versions of Python on the SLAC production systems. We do not support end of life versions (as declared by [python.org](https://www.python.org/downloads/)), tests and workflows should be updated accordingly. 
 
 ## Python style
 Please try to follow the [PEP 8 Style Guide](https://peps.python.org/pep-0008/). 
