@@ -50,7 +50,7 @@ The Wire Scanner system is organized in four distinct layers, each with clear re
 ### Responsibility
 Low-level control of wire scanner hardware via EPICS Process Variables (PVs). Provides abstractions for:
 - Motor position control and readback
-- Scan parameter configuration (speed, pulse count, ranges)
+- Scan parameter configuration (speed, pulses measured per profile (scan pulses), ranges)
 - State management (initialization, homing, enabled status)
 - Safety interlocks (speed limits, range validation)
 
