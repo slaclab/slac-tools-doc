@@ -4,7 +4,7 @@
 
 **Audience**: Developers adding GUI features, modifying widget behavior, or debugging operator-facing issues
 
-**Last Updated**: June 18, 2026
+**Last Updated**: October 13, 2026
 
 ---
 
@@ -38,11 +38,23 @@ slacwire/
 ├── ws_gui.py                  # Main display: WireScanSuiteGUI, WireScanSuiteThread
 ├── wire_scan_gui.ui           # Qt Designer layout (XML)
 ├── wire_scan_gui.yaml         # Beampath → area → wire configuration
+├── __main__.py                # CLI entry point
+├── _constants.py              # VALID_BEAMPATHS, VALID_FIT_METHODS, paths
+├── config/
+│   ├── __init__.py
+│   └── wire_config.py         # WireConfig, get_wire_config, set_wire_config (SQLite)
+├── registry/
+│   ├── registry.py            # RunRegistry (JSON audit trail)
+│   ├── registry_sqlite.py     # SQLite-backed registry
+│   ├── kpi_cli.py             # KPI command-line interface
+│   ├── kpi_daily_summary.py   # Daily KPI aggregation
+│   ├── kpi_queries.py         # KPI database queries
+│   └── log_run_cli.py         # CLI for logging runs
 └── widgets/
     ├── __init__.py            # Public exports
     ├── navigation.py          # NavigationWidget (beampath + area combos)
-    ├── measurement.py         # MeasurementWidget (wire, detector, BPMs, options)
-    ├── plots.py               # PlotWidget, MplCanvas, ProfileControl
+    ├── measurement.py         # MeasurementWidget (wire, detector, BPMs, toroids, options)
+    ├── plots.py               # PlotWidget, MplCanvas, ProfileControl, FitControl
     └── text_logger.py         # QTextEditLogger, attach_logger_to_widget
 ```
 
@@ -81,15 +93,20 @@ WireScanSuiteGUI.__init__(parent, args, macros)
 ### Signal Wiring
 
 ```
-NavigationWidget.areaChanged ──────► MeasurementWidget.update_area()
-NavigationWidget.beampathChanged ──► GUI._on_beampath_changed()
-MeasurementWidget.wireChanged ─────► GUI.update_parameters()
-MeasurementWidget.wireChanged ─────► GUI.update_plots()
-MeasurementWidget.detectorChanged ─► GUI._on_detector_changed()
-MeasurementWidget.detectorChanged ─► GUI.update_plots()
-GUI.dataChanged ───────────────────► GUI.update_plots()
-ProfileControl.profileChanged ─────► GUI.update_profile_plot()
+NavigationWidget.areaChanged ──────────► MeasurementWidget.update_area()
+NavigationWidget.beampathChanged ──────► GUI._on_beampath_changed()
+NavigationWidget.beampathChanged ──────► MeasurementWidget.set_beampath()
+MeasurementWidget.wireChanged ─────────► GUI.update_parameters()
+MeasurementWidget.wireChanged ─────────► GUI.update_plots()
+MeasurementWidget.detectorChanged ─────► GUI._on_detector_changed()
+MeasurementWidget.detectorChanged ─────► GUI.update_plots()
+MeasurementWidget.jitter_checkbox ─────► GUI._on_jitter_toggled()
+GUI.dataChanged ───────────────────────► GUI.update_plots()
+ProfileControl.profileChanged ─────────► GUI.update_profile_plot()
+FitControl.fitMethodChanged ───────────► GUI._on_fit_method_changed()
 ```
+
+Additionally, `MeasurementWidget` internally connects `wireChanged` to its own `update_detectors()`, `update_toroids()`, `update_bpms()`, and `_apply_config()` methods.
 
 ### Button Callbacks
 
@@ -98,8 +115,9 @@ ProfileControl.profileChanged ─────► GUI.update_profile_plot()
 | Start Scan | `start_scan_callback` | Spawns `WireScanSuiteThread`, disables button |
 | Save Data | `save_callback` | Saves latest result to HDF5 via file dialog |
 | Load Data | `load_callback` | Opens HDF5 file and loads result for display |
-| Post to Logbook | `logbook_callback` | Saves profile plot PNG, submits to physics elog |
-| Save/Load Config | *(disabled)* | Placeholder for future config persistence |
+| Post to Logbook | `logbook_callback` | Saves profile plot PNG, delegates to `suite.post_to_logbook()` |
+| Save Config | `save_config_callback` | Persists current scan settings to SQLite via `measurement.save_config()` |
+| Load Config | `load_config_callback` | Loads saved settings via `measurement._apply_config()` |
 
 ---
 
@@ -112,7 +130,14 @@ A `QThread` subclass that runs the scan off the main thread to keep the GUI resp
 | Signal | Payload | When Emitted |
 |--------|---------|--------------|
 | `scan_complete` | `(wire_name, method, data, entry)` | Scan succeeded |
-| `scan_failed` | `(wire_identifier, error_message)` | Exception during scan |
+| `scan_failed` | `(wire_identifier, error_message, traceback)` | Exception during scan |
+
+### Constructor
+
+```python
+WireScanSuiteThread(suite, wire_identifier, beampath, detector,
+                    jitter_correction=False, charge_normalization=False)
+```
 
 ### Execution Flow
 
@@ -121,12 +146,13 @@ WireScanSuiteThread.run()
     │
     ├── Extract wire_name from "WIRE:AREA" identifier
     ├── Set beampath and detector on shared suite
-    ├── suite.run_single(wire=wire_name, scan_mode="otf")
+    ├── suite.run_single(wire=wire_name, scan_mode="otf",
+    │                     jitter_correction=..., charge_normalization=...)
     ├── data = suite.latest_run(wire_name)
     ├── Find matching registry entry
     └── emit scan_complete(wire_name, method, data, entry)
          │
-         └── on exception → emit scan_failed(wire_identifier, str(exc))
+         └── on exception → emit scan_failed(wire_identifier, str(exc), traceback)
 ```
 
 ### Thread Safety
@@ -170,22 +196,31 @@ Manages wire device selection and scan parameters. Creates `Wire` device instanc
 **UI Components**:
 - Wire combo (`QComboBox`) — wire names, with area stored as item data
 - Detector combo (`QComboBox`) — populated from `wire.metadata.detectors`
+- Toroid combo (`QComboBox`) — populated from `wire.metadata.charge_toroids`
 - BPM list (`QListWidget`) — populated from `wire.metadata.tmitloss.upstream`
-- Jitter correction checkbox *(currently disabled)*
-- Charge normalization checkbox *(currently disabled)*
+- Jitter correction checkbox
+- Charge normalization checkbox
 
-**Device Creation**: On wire selection, calls `create_wire_fn(area, name)` (injected at construction) to instantiate the `Wire` device object. This connects to EPICS and loads metadata.
+**Additional Methods**:
+- `update_toroids()` — populates the toroid combo from wire metadata
+- `set_beampath(beampath)` — updates internal beampath and refreshes detector/config state
+- `set_fit_control(fit_control)` — cross-widget reference to `FitControl` for config integration
+- `_apply_config()` — loads per-wire config from SQLite and applies to UI widgets
+- `save_config()` — persists current UI state to SQLite
+
+**Device Creation**: On wire selection, calls `create_wire_fn(area, name)` (injected at construction) to instantiate the `Wire` device object. This connects to EPICS and loads metadata. Wire selection also triggers `_apply_config()` to load saved preferences.
 
 ### PlotWidget
 
 **File**: `widgets/plots.py`
 
-Container widget holding the trajectory canvas, profile canvas, and profile radio buttons.
+Container widget holding the trajectory canvas, profile canvas, profile radio buttons, and fit method selector.
 
 **Components**:
 - `trajectory_plot` — `MplCanvas` for wire position vs detector plot
 - `profile_plot` — `MplCanvas` for beam profile with fitted curve
 - `profile_control` — `ProfileControl` with X/Y/U radio buttons
+- `fit_control` — `FitControl` for fitting method selection
 
 #### MplCanvas
 
@@ -194,6 +229,18 @@ A `FigureCanvasQTAgg` wrapper that creates a matplotlib `Figure` with one subplo
 #### ProfileControl
 
 Radio button group (X, Y, U) for selecting which beam profile to display. Emits `profileChanged(str)` on toggle.
+
+#### FitControl
+
+A `QGroupBox` containing a `QComboBox` for selecting the fitting method used during analysis.
+
+| Signal | Payload | Trigger |
+|--------|---------|---------|
+| `fitMethodChanged` | `str` | User selects a fitting method |
+
+**Properties**: `fitting_method` (returns current slug), `set_fitting_method(method)`
+
+The combo is populated from `VALID_FIT_METHODS` (defined in `slacwire/_constants.py`). Methods not yet implemented are disabled (greyed out). Currently implemented: `"gaussian"`, `"asymmetric_gaussian"`, `"super_gaussian"`.
 
 ### QTextEditLogger
 
@@ -294,12 +341,11 @@ Widget object names in the `.ui` file must match the PV attribute names on the d
 
 The logbook callback:
 
-1. Determines logbook name from beampath prefix: `SC_*` → `"lcls2"`, `CU_*` → `"lcls"`
+1. Saves the current profile plot figure to a PNG via `suite.view.save_fig_to_path()`
 2. Constructs a title: `"{wire} Scan v. {detector} - {profile} Profile"`
-3. Saves the current profile plot figure to a temporary PNG
-4. Calls `physicselog.submit_entry()` to post to the elog
+3. Delegates to `suite.post_to_logbook(title, body, attachment)` (defined in `LogbookMixin`)
 
-The `physicselog` module is imported dynamically — the GUI degrades gracefully if it's unavailable.
+The `LogbookMixin` handles logbook resolution (SC → `"lcls2"`, CU → `"lcls"`) and calls `physicselog.submit_entry()`. The `physicselog` module is imported dynamically — the GUI degrades gracefully if it's unavailable.
 
 ---
 
@@ -312,7 +358,33 @@ Two output targets for the `"wire_scan_logger"`:
 
 The logger is shared with the suite layer — the `suite/` modules and `registry.py` log to the same `"wire_scan_logger"` name, so their messages appear in the GUI status area.
 
-Attempts to use `lcls_tools.common.logger.file_logger.custom_logger` first; falls back to a basic `logging.FileHandler` if that package isn't available.
+Uses `slac_measurements.logger.file_logger.custom_logger` for file logging; falls back to a basic `logging.FileHandler` if that module isn't available.
+
+---
+
+## Per-Wire Config Persistence
+
+The GUI persists operator scan preferences per wire/beampath pair in a shared SQLite database.
+
+**Location**: `slacwire/config/wire_config.py`
+
+**Schema**: Table `wire_config` with columns:
+- `wire` (TEXT, PK) + `beampath` (TEXT, PK) — composite primary key
+- `fitting_method` (TEXT, default `"gaussian"`)
+- `detector`, `toroid` (TEXT, nullable)
+- `charge_normalization`, `jitter_correction` (INTEGER, boolean)
+- `jitter_bpms` (TEXT, nullable)
+- `updated_at`, `updated_by` (audit fields)
+
+**API**:
+```python
+from slacwire.config import WireConfig, get_wire_config, set_wire_config
+
+config = get_wire_config(wire="WS28144", beampath="CU_HXR")
+set_wire_config(wire="WS28144", beampath="CU_HXR", fitting_method="asymmetric_gaussian")
+```
+
+**Workflow**: When a wire is selected in the GUI, `MeasurementWidget._apply_config()` loads the saved config and applies it to the detector combo, toroid combo, jitter checkbox, charge normalization checkbox, and fit method selector. When the user clicks "Save Config", `MeasurementWidget.save_config()` writes current widget states back to the database.
 
 ---
 

@@ -4,7 +4,7 @@
 
 **Audience**: Developers working with wire scanner hardware interfaces, EPICS integration, or device-level functionality
 
-**Last Updated**: May 28, 2026
+**Last Updated**: October 13, 2026
 
 ---
 
@@ -21,7 +21,7 @@ The Device Layer provides the foundation for all wire scanner operations by mana
 **Location**: `slac-devices/slac_devices/wire.py`
 
 **Dependencies**: 
-- `epics` - EPICS Channel Access client
+- `epics` - EPICS Channel Access client (PV type annotations say `PV` but the `PVSet` base class converts all values to `LazyPV` at runtime)
 - `pydantic` - Data validation and type safety
 - `slac_devices.device` - Base device abstraction
 
@@ -128,10 +128,21 @@ wire = create_wire(area="L3", name="WS28144")
 
 ### Optional PVs
 
-Some PVs are optional and may be `None` depending on wire scanner installation and configuration:
-- `beam_rate` - Substituted with global beam rate PVs in some areas
-- `temperature`, `homed`, `torque_enable`, `scan_status` - Hardware-dependent features
-- `retract`, `initialize`, `initialize_status`, `enabled` - Available only on newer scanner models
+Eleven PVs are `Optional[PV] = None` and may not be present depending on wire scanner model and installation:
+
+| PV | Reason |
+|----|--------|
+| `beam_rate` | Substituted with global beam rate PVs in some areas |
+| `enabled` | Available only on newer scanner models |
+| `homed` | Hardware-dependent |
+| `initialize` | Available only on newer scanner models |
+| `initialize_status` | Available only on newer scanner models |
+| `install_angle` | Not all devices have a dedicated PV |
+| `retract` | Available only on newer scanner models |
+| `scan_status` | Hardware-dependent |
+| `temperature` | RTD sensor not installed on all scanners |
+| `timeout` | Hardware-dependent |
+| `torque_enable` | Hardware-dependent |
 
 **Always check for `None`** before accessing optional PVs:
 
@@ -272,6 +283,18 @@ wire.retract()
 - Handling scan failures or timeouts
 - Coordinating multi-wire operations
 
+### Additional Public Methods
+
+**`active_profiles()`**: Returns a list of currently enabled plane strings (e.g., `["x", "y"]`).
+
+**`calculate_required_speed(plane, inner, outer)`**: Computes the required scan speed for a given range: `(beam_rate / scan_pulses) * (outer - inner)`.
+
+**`validate_range_speed(plane, inner, outer)`**: Validates that the required speed is within MPS and hardware max speed bounds. Returns a dict with keys `required_speed`, `mps_speed`, `speed_max`.
+
+**`position_buffer(buffer, **kwargs)`**: Retrieves position data from a timing `Buffer` object.
+
+**`mps_speed`** (property): Returns the MPS speed limit in µm/s. Note: the raw PV value is in mm/s and is multiplied by 1000 internally.
+
 ---
 
 ## Validation and Safety
@@ -361,11 +384,23 @@ Associates wire scanner with downstream measurement devices and classification:
 
 ```python
 class WireMetadata(Metadata):
-    detectors: List[str]                    # Required: data acquisition devices
-    default_detector: str                   # Primary detector for RMS extraction
-    tmitloss: Optional[TMITLossBPMs]        # Upstream/downstream BPMs for TMIT loss
-    type: str                               # Device type classification
-    wire_type: str                          # Wire type classification
+    detectors: List[str] | Dict[str, List[str]]     # Data acquisition devices (may be CU/SC-keyed dict)
+    default_detector: str | Dict[str, str]           # Primary detector (may be CU/SC-keyed dict)
+    tmitloss: Optional[TMITLossBPMs]                 # Upstream/downstream BPMs for TMIT loss
+    jitter_bpms: Optional[List[str]]                 # BPMs for jitter correction
+    charge_toroids: Optional[List[str]]              # Toroids for charge normalization
+    type: str                                        # Device type classification
+    wire_type: str                                   # Wire type classification
+```
+
+**Timing-keyed dicts**: For beamlines that serve both CU and SC timing, `detectors` and `default_detector` may be dicts keyed by `"CU"` / `"SC"`. The measurement layer resolves these automatically based on the active beampath. Example:
+```yaml
+detectors:
+  CU: ["PMT29150:LTUH"]
+  SC: ["PMT29150:LTUH", "LBLM32A:LTUH"]
+default_detector:
+  CU: "PMT29150:LTUH"
+  SC: "PMT29150:LTUH"
 ```
 
 ### Detector Configuration
@@ -426,10 +461,10 @@ class WireCollection(BaseModel):
 ### Creation and Access
 
 ```python
-from slac_devices.reader import create_wire_collection
+from slac_devices.reader import create_wire
 
-# Load all wires from configuration
-collection = create_wire_collection()
+# Load all wires for an area (returns WireCollection when name is omitted)
+collection = create_wire(area="L3")
 
 # Access individual wire by name
 wire = collection.wires["WS28144"]
@@ -438,6 +473,8 @@ wire = collection.wires["WS28144"]
 for name, wire in collection.wires.items():
     print(f"{name}: Area {wire.area}, Enabled: {wire.enabled}")
 ```
+
+**Note**: There is no standalone `create_wire_collection()` function. Use `create_wire(area=...)` without `name` to get a `WireCollection`.
 
 ### Validation
 
@@ -734,7 +771,9 @@ else:
 
 ---
 
-## Next Steps
+## Related Documentation
 
-- **[03-measurement-layer.md](03-measurement-layer.md)**: Data collection, Gaussian fitting, and analysis *(coming soon)*
-- **[01-architecture-overview.md](01-architecture-overview.md)**: System-wide architecture context
+- [Architecture Overview](01-architecture-overview.md) — System-wide context
+- [Measurement Layer](03-measurement-layer.md) — Data collection and analysis
+- [Suite Layer](04-suite-layer.md) — Orchestration and run tracking
+- [GUI Layer](05-gui-layer.md) — Operator interface
