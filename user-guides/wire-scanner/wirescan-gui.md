@@ -18,6 +18,30 @@ pydm slacwire/ws_gui.py
 
 The window opens with the title **"Wire Scan GUI"** and displays the LCLS header with live accelerator time-of-day and machine mode readbacks.
 
+### Launching with Pre-Selected State
+
+Append `--beampath`, `--area`, `--wire`, and/or `--detector` after the display file to open the GUI with specific selections already made. All arguments are optional and applied in order — later arguments are ignored if an earlier one doesn't match an available option.
+
+```bash
+# Open on SC_HXR beampath, COL1 area, wire WSC106
+pydm slacwire/ws_gui.py --beampath SC_HXR --area COL1 --wire WSC106
+
+# Full pre-configuration including detector
+pydm slacwire/ws_gui.py --beampath CU_HXR --area L3 --wire WS28144 --detector PMT29150
+
+# Just pre-select the beampath (area/wire/detector default to first available)
+pydm slacwire/ws_gui.py --beampath SC_DIAG0
+```
+
+| Argument | Description |
+|----------|-------------|
+| `--beampath` | Accelerator beamline (`CU_HXR`, `CU_SXR`, `SC_HXR`, `SC_SXR`, `SC_BSYD`, `SC_DIAG0`) |
+| `--area` | Machine area (must exist under the selected beampath) |
+| `--wire` | Wire scanner name (must exist in the selected area) |
+| `--detector` | Detector name (must be available for the selected wire) |
+
+If an argument value is not found in its dropdown (e.g., a wire that doesn't exist in the selected area), a warning is logged and subsequent arguments are skipped. The GUI remains usable with whatever selections were successfully applied.
+
 ---
 
 ## GUI Layout
