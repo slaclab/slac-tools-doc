@@ -4,7 +4,7 @@
 
 **Audience**: Developers working with wire scan data acquisition, analysis algorithms, or extending scan modes
 
-**Last Updated**: October 13, 2026
+**Last Updated**: October 21, 2026
 
 ---
 
@@ -242,7 +242,7 @@ Wire moves to discrete positions sequentially. Buffer runs concurrently.
 3. Build sorted position list via `get_step_positions(device)` from active profiles (inner/outer for each)
 4. Move through each position sequentially via `move_to_step_position()`:
    - Even-indexed positions (fast travel): move at `speed_max`
-   - Odd-indexed positions (data-taking traverse): calculate speed from `(range / scan_pulses) * beam_rate`
+   - Odd-indexed positions (data-taking traverse): calculate speed from `(range / scan_pulses) * effective_beam_rate`
    - Wait for arrival within 250 µm tolerance
 5. Retract wire after all positions (with 2s wait before and after retract)
 6. Wait for buffer to complete (with timeout)
@@ -254,8 +254,10 @@ speed = device.speed_max
 
 # Odd indices: data-taking speed across a profile range
 position_delta = positions[i] - positions[i - 1]
-speed = (position_delta / device.scan_pulses) * device.beam_rate
+speed = (position_delta / device.scan_pulses) * effective_beam_rate
 ```
+
+`effective_beam_rate` is `min(device.beam_rate, buffer.rate_limit_hz)` (see BYKIK rate mask below).
 
 **When to use**: Low beam rates or scenarios requiring discrete position measurements.
 
@@ -307,7 +309,7 @@ Steps through all positions without a buffer. Runs the motor polling in a backgr
 
 ### Timing Buffer Management (`collection/buffer.py`)
 
-**`reserve_buffer(beampath, pulses, beam_rate)`** allocates a timing buffer sized for the scan:
+**`reserve_buffer(beampath, pulses, beam_rate, area=None)`** allocates a timing buffer sized for the scan:
 
 ```python
 from slac_measurements.wires.collection.buffer import reserve_buffer
@@ -316,9 +318,12 @@ buf = reserve_buffer(
     beampath="CU_HXR",
     pulses=350,
     beam_rate=120,
+    area="LTUH",
     logger=logger,
 )
 ```
+
+**BYKIK rate mask**: The collection passes the wire's `area` through to `slac_timing.create_buffer`. For CU buffers in LTUH/LTUS, slac-timing reads `IOC:BSY0:MP01:BYKIK_RATE` / `BYKIKS_RATE` and adds the matching `RATE_MPS_*` inclusion bit, so the buffer records only shots that get past the BSY (matches MATLAB `whatEDefParams`). The buffer's `rate_limit_hz` is then the BYKIK rate. At 120 Hz it is `None`. At 0 Hz reservation raises `slac_timing.NoBeamError`.
 
 **Buffer point calculation**: Uses a logarithmic fudge factor to account for rate-dependent overhead:
 - Low rates (~10 Hz): fudge factor ≈ 1.5
@@ -332,9 +337,10 @@ buf = reserve_buffer(
 
 **Acquisition timeout** (in collection base class):
 ```python
+effective_beam_rate = min(beam_rate, buffer.rate_limit_hz)  # beam_rate if no limit
 timeout = max(
-    (n_points / beam_rate) * 1.25,      # 25% margin
-    (n_points / beam_rate) + 10.0,      # minimum 10s extra
+    (n_points / effective_beam_rate) * 1.25,      # 25% margin
+    (n_points / effective_beam_rate) + 10.0,      # minimum 10s extra
 )
 ```
 

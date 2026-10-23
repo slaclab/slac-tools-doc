@@ -4,7 +4,7 @@
 
 **Audience**: Developers adding GUI features, modifying widget behavior, or debugging operator-facing issues
 
-**Last Updated**: October 13, 2026
+**Last Updated**: October 23, 2026
 
 ---
 
@@ -55,7 +55,8 @@ slacwire/
     ├── navigation.py          # NavigationWidget (beampath + area combos)
     ├── measurement.py         # MeasurementWidget (wire, detector, BPMs, toroids, options)
     ├── plots.py               # PlotWidget, MplCanvas, ProfileControl, FitControl
-    └── text_logger.py         # QTextEditLogger, attach_logger_to_widget
+    ├── text_logger.py         # QTextEditLogger, attach_logger_to_widget
+    └── error_dialog.py        # ErrorDialog (resizable scan-failure popup)
 ```
 
 ---
@@ -249,6 +250,12 @@ The combo is populated from `VALID_FIT_METHODS` (defined in `slacwire/_constants
 Bridges Python's `logging` module to a `QTextEdit` widget. Log records are formatted and delivered to the widget via a `pyqtSignal` to ensure thread-safe updates.
 
 **Format**: `HH:MM:SS - LEVEL - message`
+
+### ErrorDialog
+
+**File**: `widgets/error_dialog.py`
+
+Resizable `QDialog` shown by `on_scan_failure()`. Replaces `QMessageBox`, which has a fixed size and makes long tracebacks hard to read. Shows a critical icon, the error summary, and the full traceback in a read-only, scrollable, monospace text area. A size grip is enabled.
 
 ---
 
