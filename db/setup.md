@@ -42,7 +42,7 @@ To pull this CSV file yourself, navigate to this website while logged into your 
 
 Click actions, then select "download" from the drop menu.
 
-![A Picture of the Oracle Web interface with the Download option selected.](oracle_download.png)
+![A Picture of the Oracle Web interface with the Download option selected.](oracle_download_all_devices.png)
 
 By default, this file is stored in the `slac_db/package_data` directory.
 
