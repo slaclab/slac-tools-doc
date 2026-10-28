@@ -40,9 +40,9 @@ The lcls_elements db is sourced from a CSV file, which we pull from Oracle. This
 
 To pull this CSV file yourself, navigate to this website while logged into your SLAC VPN. https://oraweb.slac.stanford.edu/apex/slacprod/f?p=116:600:12734138584515
 
-Click actions, then select "download" from the drop menu.
+Make sure the only filter 'Type' is 'MAD' devices, this will grab both active and inactive devices in the Oracle database. Click actions, then select "download" from the drop menu.
 
-![A Picture of the Oracle Web interface with the Download option selected.](oracle_download.png)
+![A Picture of the Oracle Web interface with the Download option selected.](oracle_download_all_devices.png)
 
 By default, this file is stored in the `slac_db/package_data` directory.
 
