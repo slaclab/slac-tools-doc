@@ -4,7 +4,7 @@
 
 **Audience**: Developers adding GUI features, modifying widget behavior, or debugging operator-facing issues
 
-**Last Updated**: October 23, 2026
+**Last Updated**: October 29, 2026
 
 ---
 
@@ -40,6 +40,7 @@ slacwire/
 ├── wire_scan_gui.yaml         # Beampath → area → wire configuration
 ├── __main__.py                # CLI entry point
 ├── _constants.py              # VALID_BEAMPATHS, VALID_FIT_METHODS, paths
+├── speed_status.py            # Qt-free display/logging rules for wire speed status
 ├── config/
 │   ├── __init__.py
 │   └── wire_config.py         # WireConfig, get_wire_config, set_wire_config (SQLite)
@@ -56,6 +57,7 @@ slacwire/
     ├── measurement.py         # MeasurementWidget (wire, detector, BPMs, toroids, options)
     ├── plots.py               # PlotWidget, MplCanvas, ProfileControl, FitControl
     ├── text_logger.py         # QTextEditLogger, attach_logger_to_widget
+    ├── speed_status.py        # SpeedStatusMonitor, build_speed_labels
     └── error_dialog.py        # ErrorDialog (resizable scan-failure popup)
 ```
 
@@ -298,7 +300,28 @@ if pv_obj is not None:
     child.channel = pv_obj.pvname
 ```
 
-Widget object names in the `.ui` file must match the PV attribute names on the device (e.g., `x_wire_inner`, `use_y_wire`, `scan_pulses`).
+Widget object names in the `.ui` file must match the PV attribute names on the device (e.g., `x_wire_inner`, `use_y_wire`, `scan_pulses`). Widgets whose names end in `Label` are skipped.
+
+### Wire Speed Status
+
+Because the range fields write straight to the PVs, the device-layer setters never run, so the GUI checks speed itself. `SpeedStatusMonitor` (`widgets/speed_status.py`) polls `wire.range_status(profile)` once a second on a worker thread (a disconnected PV would otherwise block the GUI) and drives a **Speed** column (column 3 of the Parameters grid).
+
+The column is **hidden while no active plane is in alarm**. As soon as any active plane is too fast or too slow, the whole column appears:
+
+| Plane state | Status label | Range fields | Tooltip |
+|---|---|---|---|
+| Active, too fast | `Too Fast`, red bold | red border | target width, e.g. `Narrow the range to less than 800 um` |
+| Active, too slow | `Too Slow`, red bold | red border | target width, e.g. `Widen the range to more than 2917 um` |
+| Active, OK | `OK`, green | normal | — |
+| Inactive or unreadable | blank | normal | — |
+
+Labels are created at runtime by `build_speed_labels()` and named `{x,y,u}_speed_statusLabel` / `SpeedStatusHeaderLabel` so `update_parameters()` skips them.
+
+A short red state while editing one end of a range is expected; the 1 s poll also acts as a debounce. The activity log gets one line per state change only: a warning when an active plane becomes invalid or unreadable (e.g. `X Profile too slow: range too small. Widen the range to more than 2917 um`), and `X Profile speed OK` when it recovers. The text comes from `speed_summary` / `speed_advice` in `speed_status.py`; the device layer returns only data. The advice never suggests changing scan pulses.
+
+**Start gate**: `start_scan_callback()` refuses to start if `active_wire.invalid_profiles()` is non-empty and logs an error with the fix for each plane. The Start button stays enabled because the remote protocol uses `startButton.isEnabled()` to mean "not scanning". Remote `SCAN` replies `ERROR:<advice>` then `READY` instead of `SCANNING`. Polling is paused while a scan thread runs. The suite's pre-scan check is the final safeguard.
+
+The display and logging rules (`describe_plane`, `transition_level`) live in the Qt-free `slacwire/speed_status.py` so they can be unit-tested without Qt.
 
 ---
 

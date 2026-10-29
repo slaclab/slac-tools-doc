@@ -81,7 +81,7 @@ wire = create_wire(area="L3", name="WS28144")
 
 # Configure scan
 wire.use_x_wire = True
-wire.x_range = [37000, 45000]  # [inner, outer] in motor units (microns)
+wire.set_range("x", [37000, 45000])  # [inner, outer] in motor units (microns)
 wire.speed = 10000  # µm/s
 
 # Initialize and check state

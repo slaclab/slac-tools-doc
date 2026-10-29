@@ -4,7 +4,7 @@
 
 **Audience**: Developers extending scan workflows, adding new output formats, or integrating suite functionality into higher-level tools
 
-**Last Updated**: October 13, 2026
+**Last Updated**: October 26, 2026
 
 ---
 
@@ -62,7 +62,7 @@ The Suite layer transforms raw measurement primitives into a production data acq
 @dataclass
 class WireScanSuite(
     LogbookMixin, JitterCompareMixin, CompareMixin, DiagnosticsMixin,
-    MotionTestMixin, CollectMixin, RunMixin, LoaderMixin, BeamsizesMixin,
+    MotionTestMixin, CollectMixin, RunMixin, PreflightMixin, LoaderMixin, BeamsizesMixin,
     ResultsMixin, WireScanSuiteBase
 ):
     pass
@@ -120,6 +120,8 @@ suite.run_single("WS28144", scan_mode="otf")
 suite.run_single("WS27644", scan_mode="step", rms_detector="PMT27650")
 suite.run_single("WS28144", jitter_correction=True, charge_normalization=True)
 ```
+
+For OTF scans, `run_single` first runs the pre-scan speed check (see [Pre-Scan Speed Check](#pre-scan-speed-check)). If it fails, `ValueError` is raised before any data collection or registry entry.
 
 #### `run_all(scan_mode="otf", rms_detector=None)` — `_run.py`
 
@@ -261,6 +263,17 @@ Replace the wire list and rebuild device instances.
 ```python
 suite.set_wires(["WS28144", "WS28444", "WS28744"])
 ```
+
+### Pre-Scan Speed Check (`_preflight.py`)
+
+`PreflightMixin._check_scan_speed(device)` runs at the start of OTF `run_single` and `collect_single`. It calls `device.invalid_profiles()` and raises `ValueError` if any active plane's IOC-calculated speed is outside `speed_floor < speed < speed_max`:
+
+```
+Scan refused, invalid wire speed:
+WS28144 X Profile too fast: range too large. Narrow the range to less than 800 um
+```
+
+Step scans skip the check because they set their own motor speed. `run_all` logs a refused wire in `failed_wires` and continues. `format_invalid_profiles()` builds the message and is shared with the GUI.
 
 ### Internal Scan Flow (`_run_device_scan`)
 
