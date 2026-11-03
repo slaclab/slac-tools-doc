@@ -4,7 +4,7 @@
 
 **Audience**: Developers extending scan workflows, adding new output formats, or integrating suite functionality into higher-level tools
 
-**Last Updated**: October 26, 2026
+**Last Updated**: October 30, 2026
 
 ---
 
@@ -87,7 +87,7 @@ suite = WireScanSuite(
 ```
 
 On construction (`__post_init__` in `_base.py`):
-1. `_build_devices()` — creates `Wire` device instances via `create_wire(area, name)` for every wire in the list
+1. `_build_devices()` — creates `Wire` device instances via `create_wire(area, name)` for every wire in the list, then sorts both `wires` and `devices` by `sum_l_meters` (beamline order)
 2. `_build_view()` — instantiates a `WireScanView` for plotting
 3. Output directories are created: `outdir` (dated) and `plotdir` (outdir/plots)
 
@@ -95,8 +95,8 @@ On construction (`__post_init__` in `_base.py`):
 
 | Attribute | Type | Description |
 |-----------|------|-------------|
-| `wires` | `list[str]` | Wire names to operate on (e.g. `["WS28144"]`) |
-| `devices` | `dict[str, Wire]` | Cached device instances keyed by wire name |
+| `wires` | `list[str]` | Wire names to operate on (e.g. `["WS28144"]`); kept sorted by `sum_l_meters`. Reassigning rebuilds `devices` |
+| `devices` | `dict[str, Wire]` | Cached device instances keyed by wire name, in the same order as `wires` |
 | `beampath` | `Beampath` | Literal: `"CU_HXR"`, `"CU_SXR"`, `"SC_HXR"`, `"SC_SXR"`, `"SC_BSYD"`, `"SC_DIAG0"` |
 | `detector` | `str \| None` | Override detector; falls back to device default |
 | `outdir` | `Path` | HDF5 output directory (default: `/u1/lcls/physics/data/wire_scan/YYYY/MM/DD/`) |
@@ -258,7 +258,7 @@ Generate a comprehensive vibration diagnostic report: profiles, residuals, FFT, 
 
 #### `set_wires(wires)` — `_base.py`
 
-Replace the wire list and rebuild device instances.
+Replace the wire list and rebuild device instances (equivalent to `suite.wires = [...]`). Existing devices are reused; both `wires` and `devices` are re-sorted by `sum_l_meters`.
 
 ```python
 suite.set_wires(["WS28144", "WS28444", "WS28744"])
