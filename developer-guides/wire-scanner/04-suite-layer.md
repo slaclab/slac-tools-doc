@@ -4,7 +4,7 @@
 
 **Audience**: Developers extending scan workflows, adding new output formats, or integrating suite functionality into higher-level tools
 
-**Last Updated**: October 30, 2026
+**Last Updated**: November 12, 2026
 
 ---
 
@@ -111,7 +111,26 @@ On construction (`__post_init__` in `_base.py`):
 
 ### Public Methods
 
-#### `run_single(wire, scan_mode="otf", rms_detector=None, jitter_correction=False, charge_normalization=False)` — `_run.py`
+#### Per-wire default scan mode
+
+Every scan entry point (`run_single`, `run_all`, `collect_single`, `motion_test`)
+takes `scan_mode=None` by default. `None` resolves per wire through
+`slacwire._constants.resolve_scan_mode()`: wires listed in `SCAN_MODE_OVERRIDES`
+use the mapped mode, and every other wire uses `DEFAULT_SCAN_MODE` (`"otf"`).
+An explicit `scan_mode="otf"` or `"step"` always wins. The CLI (`--scan-mode`
+omitted) and the GUI pick up the same defaults.
+
+| Wire | Default | Reason |
+|------|---------|--------|
+| `WS02` | `"step"` | OTF unsupported due to lagging hardware |
+
+```python
+suite.run_single("WS02")                  # step (override)
+suite.run_single("WS02", scan_mode="otf") # explicit — OTF
+suite.run_all()                           # each wire uses its own default
+```
+
+#### `run_single(wire, scan_mode=None, rms_detector=None, jitter_correction=False, charge_normalization=False)` — `_run.py`
 
 Execute a complete scan for one wire: collection → analysis → save → plot → registry.
 
@@ -123,15 +142,15 @@ suite.run_single("WS28144", jitter_correction=True, charge_normalization=True)
 
 For OTF scans, `run_single` first runs the pre-scan speed check (see [Pre-Scan Speed Check](#pre-scan-speed-check)). If it fails, `ValueError` is raised before any data collection or registry entry.
 
-#### `run_all(scan_mode="otf", rms_detector=None)` — `_run.py`
+#### `run_all(scan_mode=None, rms_detector=None)` — `_run.py`
 
-Run all configured wires sequentially in the given scan mode.
+Run all configured wires sequentially in the given scan mode (or each wire's default when `None`).
 
 ```python
 suite.run_all(scan_mode="otf")
 ```
 
-#### `collect_single(wire, scan_mode="otf")` — `_collect.py`
+#### `collect_single(wire, scan_mode=None)` — `_collect.py`
 
 Collect raw data without analysis. Useful for debugging or when custom post-processing is needed.
 
@@ -140,7 +159,7 @@ suite.collect_single("WS28144", scan_mode="step")
 raw_data = suite.latest_run("WS28144")  # collection-only result
 ```
 
-#### `motion_test(wire, scan_mode="otf", plot=True)` — `_motion.py`
+#### `motion_test(wire, scan_mode=None, plot=True)` — `_motion.py`
 
 Run beam-less motion validation for a single wire. Exercises the wire motion without requiring beam to verify mechanical behavior.
 

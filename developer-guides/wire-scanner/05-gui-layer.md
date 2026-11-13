@@ -4,7 +4,7 @@
 
 **Audience**: Developers adding GUI features, modifying widget behavior, or debugging operator-facing issues
 
-**Last Updated**: October 29, 2026
+**Last Updated**: November 12, 2026
 
 ---
 
@@ -41,6 +41,7 @@ slacwire/
 ├── __main__.py                # CLI entry point
 ├── _constants.py              # VALID_BEAMPATHS, VALID_FIT_METHODS, paths
 ├── speed_status.py            # Qt-free display/logging rules for wire speed status
+├── plot_navigation.py         # Qt-free pan/zoom axis-limit math for MplCanvas
 ├── config/
 │   ├── __init__.py
 │   └── wire_config.py         # WireConfig, get_wire_config, set_wire_config (SQLite)
@@ -121,6 +122,7 @@ Additionally, `MeasurementWidget` internally connects `wireChanged` to its own `
 | Post to Logbook | `logbook_callback` | Saves profile plot PNG, delegates to `suite.post_to_logbook()` |
 | Save Config | `save_config_callback` | Persists current scan settings to SQLite via `measurement.save_config()` |
 | Load Config | `load_config_callback` | Loads saved settings via `measurement._apply_config()` |
+| Export to .mat | `export_mat_callback` | Writes displayed result to `suite.outdir/Export_<wire>_<timestamp>.mat` via `result.to_mat()` (MATLAB `wirescan_gui` format); logs the directory and filename |
 
 ---
 
@@ -139,8 +141,15 @@ A `QThread` subclass that runs the scan off the main thread to keep the GUI resp
 
 ```python
 WireScanSuiteThread(suite, wire_identifier, beampath, detector,
-                    jitter_correction=False, charge_normalization=False)
+                    jitter_correction=False, charge_normalization=False,
+                    scan_mode="otf")
 ```
+
+`scan_mode` is resolved per wire by `start_scan_callback()` via
+`slacwire._constants.default_scan_mode()`. Wires listed in
+`SCAN_MODE_OVERRIDES` use the mapped mode; all others default to `"otf"`.
+Currently `WS02` is overridden to `"step"` (OTF unsupported due to lagging hardware).
+The same defaults apply in the suite and CLI — see the Suite Layer guide.
 
 ### Execution Flow
 
@@ -149,7 +158,7 @@ WireScanSuiteThread.run()
     │
     ├── Extract wire_name from "WIRE:AREA" identifier
     ├── Set beampath and detector on shared suite
-    ├── suite.run_single(wire=wire_name, scan_mode="otf",
+    ├── suite.run_single(wire=wire_name, scan_mode=self.scan_mode,
     │                     jitter_correction=..., charge_normalization=...)
     ├── data = suite.latest_run(wire_name)
     ├── Find matching registry entry
@@ -228,6 +237,16 @@ Container widget holding the trajectory canvas, profile canvas, profile radio bu
 #### MplCanvas
 
 A `FigureCanvasQTAgg` wrapper that creates a matplotlib `Figure` with one subplot. The figure is rendered into by `WireScanView.draw_trajectory()` and `draw_profile()`.
+
+**X-axis navigation** (lets operators move a peak out from behind the legend):
+
+| Input | Action |
+|-------|--------|
+| Scroll wheel / horizontal swipe | Pan X by 10% of the visible span per notch |
+| Ctrl + scroll (Cmd on macOS) | Zoom X by 0.8× per notch, centered on the cursor |
+| Double-click | Reset X to autoscale |
+
+`MplCanvas.wheelEvent` handles scrolling directly. Scrolls outside the axes are ignored and passed to the parent widget. The limit math lives in the Qt-free `slacwire/plot_navigation.py` (`pan_limits`, `zoom_limits`), covered by `tests/test_plot_navigation.py`. On the trajectory plot, the twin axes share X, so both traces move together. A redraw (new scan, profile or fit change) resets the view, because `draw_*` calls `fig.clf()`.
 
 #### ProfileControl
 
@@ -340,8 +359,9 @@ The display and logging rules (`describe_plane`, `transition_level`) live in the
 3. User clicks "Start Scan"
    ├── startButton disabled
    ├── suite.show = False, suite.save_plots = False
+   ├── scan_mode = default_scan_mode(wire)  ("step" for WS02, else "otf")
    ├── WireScanSuiteThread spawned
-   └── Thread calls suite.run_single(wire, scan_mode="otf")
+   └── Thread calls suite.run_single(wire, scan_mode=scan_mode)
        └── (Layer 4 → Layer 3 → Layer 2 execution)
 
 4. Scan completes

@@ -4,7 +4,7 @@
 
 **Audience**: Developers working with wire scan data acquisition, analysis algorithms, or extending scan modes
 
-**Last Updated**: October 21, 2026
+**Last Updated**: November 12, 2026
 
 ---
 
@@ -309,7 +309,7 @@ Steps through all positions without a buffer. Runs the motor polling in a backgr
 
 ### Timing Buffer Management (`collection/buffer.py`)
 
-**`reserve_buffer(beampath, pulses, beam_rate, area=None)`** allocates a timing buffer sized for the scan:
+**`reserve_buffer(beampath, pulses, beam_rate, area=None, wire_follows_buffer_rate=False)`** allocates a timing buffer sized for the scan:
 
 ```python
 from slac_measurements.wires.collection.buffer import reserve_buffer
@@ -320,6 +320,7 @@ buf = reserve_buffer(
     beam_rate=120,
     area="LTUH",
     logger=logger,
+    wire_follows_buffer_rate=False,  # OTF; step collections pass True
 )
 ```
 
@@ -328,7 +329,13 @@ buf = reserve_buffer(
 **Buffer point calculation**: Uses a logarithmic fudge factor to account for rate-dependent overhead:
 - Low rates (~10 Hz): fudge factor ≈ 1.5
 - High rates (~16 kHz): fudge factor ≈ 1.1
-- Formula: `points = pulses × 3 × fudge(rate) + rate / 6`
+- Formula: `points = pulses × 3 × fudge(rate) + rate / 6`, where `rate` is the rate the wire speed is paced for
+
+**Sizing under a BYKIK mask**: `reserve_buffer` reads the BYKIK rate (via `slac_timing.masks.bykik_inclusion_masks`) *before* reserving, so the size can use the buffer's recording rate `buffer_rate = min(beam_rate, BYKIK rate)`:
+- **OTF** (`wire_follows_buffer_rate=False`): the motion IOC paces the wire for `beam_rate`, so the scan lasts as long as an unmasked scan, but only `buffer_rate / beam_rate` of the shots are recorded. Points = `formula(pulses, beam_rate) × buffer_rate / beam_rate`. Example: 350 pulses, 120 Hz beam, 30 Hz BYKIK → 364 points (vs 1453 unmasked).
+- **Step** (`wire_follows_buffer_rate=True`): step speed is computed from `buffer_rate`, so each profile still gets `pulses` shots. Points = `formula(pulses, buffer_rate)`.
+
+`create_buffer` reads the BYKIK rate again when it chooses the mask. If the two reads disagree, the buffer is released and `BufferError` is raised.
 
 **Constants**:
 - `_MAX_BEAM_RATE = 16000` Hz
