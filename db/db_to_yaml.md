@@ -29,7 +29,7 @@ slac_db.db_to_yaml.get_device("OTRDG02")
 5. Rebuild all YAMLs with:
 ``` python
 import slac_db
-slac_db.db_to_yaml.build()
+slac_db.db_to_yaml.write()
 ```
 
 ## Generate Device YAML with Device DB
@@ -114,5 +114,5 @@ Once you are satisfied that your db generation works, you can recreate all the Y
 
 ``` python
 import slac_db
-slac_db.db_to_yaml.build()
+slac_db.db_to_yaml.write()
 ```
