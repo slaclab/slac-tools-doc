@@ -4,7 +4,7 @@
 
 **Audience**: Developers extending or maintaining wire scanner software
 
-**Last Updated**: June 18, 2026
+**Last Updated**: October 13, 2026
 
 ---
 
@@ -16,21 +16,23 @@ The Wire Scanner system is organized in four distinct layers, each with clear re
 ┌─────────────────────────────────────────────────────────────┐
 │                      GUI Layer (Level 4)                    │
 │                      ws_gui.py (slacwire)                   │
-│        PyQt5/PyDM interface, threading, plotting, eLog      │
+│  PyQt5/PyDM interface, threading, plotting, eLog            │
+│  FitControl widget, per-wire config persistence (SQLite)    │
 └─────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────┐
 │                  Orchestration Layer (Level 3)              │
 │              suite/, view.py (slacwire)                      │
-│      WireScanSuite: run tracking, data mgmt, automation     │
-│      WireScanView: plotting and figure management           │
+│  WireScanSuite: run tracking, data mgmt, automation         │
+│  WireScanView: plotting, logbook, loader, diagnostics       │
 └─────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────┐
 │                  Measurement Layer (Level 2)                │
-│        collection.py, analysis.py (slac-measurements)       │
-│  otf_collection.py, step_collection.py, scan.py            │
-│    Data collection, Gaussian fitting, RMS extraction        │
+│           wires/ subpackage (slac-measurements)             │
+│  scan.py, collection/, analysis/, motion/                   │
+│  Data collection, Gaussian fitting, RMS extraction          │
+│  Jitter correction, charge normalization, beamless scans    │
 └─────────────────────────────────────────────────────────────┘
                               ↓
 ┌─────────────────────────────────────────────────────────────┐
@@ -79,7 +81,7 @@ wire = create_wire(area="L3", name="WS28144")
 
 # Configure scan
 wire.use_x_wire = True
-wire.x_range = [37000, 45000]  # [inner, outer] in motor units (microns)
+wire.set_range("x", [37000, 45000])  # [inner, outer] in motor units (microns)
 wire.speed = 10000  # µm/s
 
 # Initialize and check state
@@ -103,36 +105,36 @@ Exposes:
 
 ### Location
 - `slac-measurements/slac_measurements/wires/scan.py` (unified entry point)
-- `slac-measurements/slac_measurements/wires/collection.py` (base collection + factory)
-- `slac-measurements/slac_measurements/wires/otf_collection.py` (on-the-fly scan)
-- `slac-measurements/slac_measurements/wires/step_collection.py` (step scan)
-- `slac-measurements/slac_measurements/wires/analysis.py` (profile fitting and RMS extraction)
-- `slac-measurements/slac_measurements/wires/collection_results.py` (collection result types)
-- `slac-measurements/slac_measurements/wires/analysis_results.py` (analysis result types)
+- `slac-measurements/slac_measurements/wires/collection/` (base collection, OTF, step, buffer, beamless modes)
+- `slac-measurements/slac_measurements/wires/analysis/` (fitting, results, jitter correction, charge normalization, coordinates, MATLAB export)
+- `slac-measurements/slac_measurements/wires/motion/` (initialization, step positioning, motor polling)
 
 ### Responsibility
 Orchestrates wire scanning and extracts beam profile information via a two-stage pipeline:
 
-#### 2a. Data Collection (`collection.py`, `otf_collection.py`, `step_collection.py`)
+#### 2a. Data Collection (`collection/`)
 - Synchronizes wire motion with detector data acquisition
 - Manages timing buffer reservations
 - Returns raw position and detector arrays
 - Supports two scan modes: **on-the-fly** and **step**
+- Supports **beamless** variants of both modes for commissioning/motion validation
 
-#### 2b. Data Analysis (`analysis.py`)
+#### 2b. Data Analysis (`analysis/`)
 - Organizes raw data by profile (X, Y, U planes)
 - Fits Gaussian curves (standard, asymmetric, or super-Gaussian)
 - Extracts RMS beam sizes
 - Transforms coordinates (stage → beam)
+- Optional **jitter correction** via BPM orbit fits
+- Optional **charge normalization** via toroid TMIT data
 
 ### Key Classes
 
 **`WireBeamProfileMeasurement`** (unified entry point in `scan.py`)
 - Constructor: `WireBeamProfileMeasurement(beam_profile_device=wire, beampath="CU_HXR")`
-- Main method: `measure(scan_mode="otf", fitting_method="gaussian", rms_detector=None) → WireMeasurementAnalysisResult`
+- Main method: `measure(scan_mode="otf", fitting_method="gaussian", rms_detector=None, jitter_correction=False, charge_normalization=False, charge_toroid=None) → WireMeasurementAnalysisResult`
 - Composes collection + analysis in a single call
 
-**`BaseWireMeasurementCollection`** (abstract base in `collection.py`)
+**`BaseWireMeasurementCollection`** (abstract base in `collection/base.py`)
 - Constructor: created via `create_wire_collection(scan_mode, beam_profile_device, beampath)`
 - Main method: `measure() → WireMeasurementCollectionResult`
 - Workflow:
@@ -276,13 +278,17 @@ Provides programmatic API for batch/automated scanning with:
 - Result caching and retrieval
 - Beam-less motion validation tests
 - EPICS CA cache diagnostics
+- Physics logbook posting
+- Jitter comparison and vibration analysis
+- HDF5 scan discovery and loading
+- Multi-wire beam size extraction for emittance
 
 ### Key Classes
 
 **`WireScanSuite`** (dataclass, composed from mixins)
 - Constructor: `WireScanSuite(wires=["WS28144"], beampath="CU_HXR")`
 - Main methods: `run_single(wire, scan_mode="otf")`, `run_all(scan_mode="otf")`
-- Composed from: `WireScanSuiteBase`, `RunMixin`, `CollectMixin`, `ResultsMixin`, `MotionTestMixin`, `DiagnosticsMixin`
+- Composed from: `WireScanSuiteBase`, `RunMixin`, `CollectMixin`, `ResultsMixin`, `MotionTestMixin`, `DiagnosticsMixin`, `CompareMixin`, `LogbookMixin`, `JitterCompareMixin`, `LoaderMixin`, `BeamsizesMixin`
 
 **`WireScanView`** (plotting)
 - Provides `render()`, `draw_trajectory()`, `draw_profile()`, `plot_trajectory()`, `plot_profile()`
@@ -296,14 +302,20 @@ Provides programmatic API for batch/automated scanning with:
 
 ```
 suite/
-├── __init__.py        # Composes WireScanSuite from all mixins
-├── _base.py           # Dataclass fields, __post_init__, device management
-├── _run.py            # run_single, run_all (collection + analysis)
-├── _collect.py        # collect_single (raw data, no analysis)
-├── _motion.py         # motion_test (beam-less validation)
-├── _results.py        # latest_run, replot, summary
-├── _diagnostics.py    # cache_info, cache_pvs, cache_summary
-└── _constants.py      # WIRE_AREA_LOOKUP, Beampath, paths
+├── __init__.py           # Composes WireScanSuite from all mixins
+├── _base.py              # Dataclass fields, __post_init__, device management
+├── _run.py               # run_single, run_all (collection + analysis)
+├── _collect.py           # collect_single (raw data, no analysis)
+├── _motion.py            # motion_test (beam-less validation)
+├── _results.py           # latest_run, replot, summary
+├── _diagnostics.py       # cache_info, cache_pvs, cache_summary
+├── _compare.py           # compare_detectors (multi-detector overlay)
+├── _logbook.py           # post_to_logbook, post_last_to_logbook
+├── _jitter_compare.py    # jitter_compare, residual_compare, FFT analysis
+├── _loader.py            # load_scan, discover_scans
+└── _beamsizes.py         # get_beamsizes (multi-wire emittance)
+
+slacwire/_constants.py    # WIRE_AREA_LOOKUP, Beampath, paths (package root)
 ```
 
 ### Internal Architecture
@@ -477,6 +489,8 @@ Layer 2a (Collection):
          ↓
 Layer 2b (Analysis):
   WireMeasurementAnalysis(collection_result=...).analyze()
+    - [optional] compute_charge_normalization() → normalize by toroid
+    - [optional] compute_jitter() → BPM orbit-fit correction
     - _get_profile_range_indices() → identify profiles
     - _organize_data_by_profile() → separate by X/Y/U
     - _fit_data_by_profile() → Gaussian fitting
@@ -503,11 +517,10 @@ Layer 4 (GUI):
 
 ### Error Handling
 
-**Layer 1**: Decorator guards return `None` on validation failure
+**Layer 1**: Direct PV writes; callers are responsible for checking state
 ```python
-@check_state
 def start_scan(self):
-    # Only runs if initialize_status == True
+    self.controls_information.PVs.start_scan.put(value=1)
 ```
 
 **Layer 2**: Raises explicit exceptions
@@ -563,7 +576,7 @@ Dependencies flow downward only:
 
 ## Related Documentation
 
-- [Device Layer Deep Dive](02-device-layer.md)
-- [Measurement Layer Deep Dive](03-measurement-layer.md)
-- [Suite Layer Deep Dive](04-suite-layer.md)
-- [GUI Development Guide](05-gui-layer.md)
+- [Device Layer](02-device-layer.md) — Wire hardware control
+- [Measurement Layer](03-measurement-layer.md) — Data collection and analysis
+- [Suite Layer](04-suite-layer.md) — Orchestration and run tracking
+- [GUI Layer](05-gui-layer.md) — Operator interface

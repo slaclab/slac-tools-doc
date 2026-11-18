@@ -4,7 +4,7 @@
 
 **Audience**: Developers working with wire scanner hardware interfaces, EPICS integration, or device-level functionality
 
-**Last Updated**: May 28, 2026
+**Last Updated**: October 29, 2026
 
 ---
 
@@ -21,7 +21,7 @@ The Device Layer provides the foundation for all wire scanner operations by mana
 **Location**: `slac-devices/slac_devices/wire.py`
 
 **Dependencies**: 
-- `epics` - EPICS Channel Access client
+- `epics` - EPICS Channel Access client (PV type annotations say `PV` but the `PVSet` base class converts all values to `LazyPV` at runtime)
 - `pydantic` - Data validation and type safety
 - `slac_devices.device` - Base device abstraction
 
@@ -114,6 +114,7 @@ wire = create_wire(area="L3", name="WS28144")
 - `{x,y,u}_wire_inner` - Inner scan range endpoint (int, motor units)
 - `{x,y,u}_wire_outer` - Outer scan range endpoint (int, motor units)
 - `{x,y,u}_size` - Wire thickness in microns (read-only)
+- `{x,y,u}_speed_calc` - IOC-calculated scan speed for the plane (read-only, µm/s; `WIRE{X,Y,U}SPEED_CALC`)
 
 **Device State**:
 - `initialize` - Trigger initialization sequence (write, value=1)
@@ -128,10 +129,20 @@ wire = create_wire(area="L3", name="WS28144")
 
 ### Optional PVs
 
-Some PVs are optional and may be `None` depending on wire scanner installation and configuration:
-- `beam_rate` - Substituted with global beam rate PVs in some areas
-- `temperature`, `homed`, `torque_enable`, `scan_status` - Hardware-dependent features
-- `retract`, `initialize`, `initialize_status`, `enabled` - Available only on newer scanner models
+Ten PVs are `Optional[PV] = None` and may not be present depending on wire scanner model and installation:
+
+| PV | Reason |
+|----|--------|
+| `enabled` | Available only on newer scanner models |
+| `homed` | Hardware-dependent |
+| `initialize` | Available only on newer scanner models |
+| `initialize_status` | Available only on newer scanner models |
+| `install_angle` | Not all devices have a dedicated PV |
+| `retract` | Available only on newer scanner models |
+| `scan_status` | Hardware-dependent |
+| `temperature` | RTD sensor not installed on all scanners |
+| `timeout` | Hardware-dependent |
+| `torque_enable` | Hardware-dependent |
 
 **Always check for `None`** before accessing optional PVs:
 
@@ -175,18 +186,27 @@ wire.speed = 10000      # Manual override (rarely needed)
 current = wire.speed    # Read current/calculated speed
 
 # Speed limits (read-only, hardware-defined)
-wire.speed_min          # Minimum safe speed (µm/s)
+wire.speed_min          # Motor minimum speed (µm/s)
+wire.mps_speed          # MPS speed limit (µm/s)
+wire.speed_floor        # max(speed_min, mps_speed): lowest allowed scan speed
 wire.speed_max          # Maximum safe speed (µm/s)
+
+# IOC-calculated scan speed per plane (read-only, µm/s)
+wire.x_speed_calc
+wire.y_speed_calc
+wire.u_speed_calc
 ```
 
-**Speed Calculation**: The EPICS IOC automatically calculates required speed based on:
+**Speed Calculation**: The EPICS IOC calculates each plane's scan speed (`WIRE{X,Y,U}SPEED_CALC`) from:
 - `beam_rate` - Beam repetition rate (Hz)
 - `scan_pulses` - Desired sample count
 - Scan range - Distance to traverse (`outer - inner`)
 
 Formula: `speed = beam_rate × (range / scan_pulses)`
 
-**Note**: In typical usage, you configure `scan_pulses` and scan ranges, then the IOC calculates and validates the required speed. Manual speed setting is rarely needed.
+Software never recalculates this; it reads the `*_speed_calc` PVs. See [Speed Validation](#speed-validation).
+
+**Note**: In typical usage, you configure `scan_pulses` and scan ranges, then the IOC calculates the required speed. Manual speed setting is rarely needed.
 
 ### Scan Pulses Configuration
 
@@ -215,14 +235,13 @@ wire.use_u_wire = False         # Disable U (longitudinal) profile
 x_enabled = wire.use_x_wire     # bool
 
 # Generic interface
-wire.use(plane="X", val=True)   # Enable plane by name (X/Y/U)
+wire.use(profile="X", val=True)   # Enable profile by name (X/Y/U)
 ```
 
 **Range Configuration**:
 
 ```python
-# Set scan range for a plane (two-endpoint format)
-wire.x_range = [37000, 45000]   # [inner, outer] in motor units
+# Read the scan range for a plane
 current = wire.x_range          # Returns [inner, outer] list
 
 # Individual endpoint control
@@ -233,23 +252,22 @@ wire.x_wire_outer = 45000       # Set outer endpoint
 inner = wire.x_wire_inner
 outer = wire.x_wire_outer
 
-# Generic interface for all planes
-wire.set_range(plane="Y", val=[20000, 28000])
-wire.set_inner_range(plane="U", val=15000)
-wire.set_outer_range(plane="U", val=23000)
+# Set both endpoints of a plane at once
+wire.set_range(profile="Y", val=[20000, 28000])
 ```
 
 **Range Validation**:
-- Inner < Outer (enforced by `RangeModel`)
+- `set_range` requires inner < outer (`validate_range`)
 - Both values must be integers
 - Values typically in micron units (area-dependent)
+- Setters do not check speed. Setting inner and outer one at a time can pass through a temporarily invalid speed, which is expected. Check `range_status()` once both ends are set.
 
 **X, Y, U Properties** (similar patterns for all planes):
 
 ```python
 # Y plane
 wire.use_y_wire = True
-wire.y_range = [20000, 28000]
+wire.set_range(profile="Y", val=[20000, 28000])
 wire.y_wire_inner, wire.y_wire_outer  # Individual access
 wire.y_size  # Wire thickness (µm, read-only)
 ```
@@ -272,6 +290,18 @@ wire.retract()
 - Handling scan failures or timeouts
 - Coordinating multi-wire operations
 
+### Additional Public Methods
+
+**`active_profiles()`**: Returns a list of currently enabled plane strings (e.g., `["x", "y"]`).
+
+**`range_status(profile)`**: Returns a `RangeStatus` describing whether the plane's current range gives a valid speed, with the values it was decided from. See [Speed Validation](#speed-validation).
+
+**`invalid_profiles()`**: Returns the `RangeStatus` of every active plane whose speed is invalid (empty list when all active planes are OK).
+
+**`position_buffer(buffer, **kwargs)`**: Retrieves position data from a timing `Buffer` object.
+
+**`mps_speed`** (property): Returns the MPS speed limit in µm/s. Note: the raw PV value is in mm/s and is multiplied by 1000 internally.
+
 ---
 
 ## Validation and Safety
@@ -286,16 +316,16 @@ The Device Layer uses standalone validator functions to enforce type safety and 
 # 1. List length == 2
 # 2. First element < second element
 
-wire.x_range = [45000, 37000]  # Raises ValueError
-wire.x_range = [37000, 45000]  # Valid
+wire.set_range("x", [45000, 37000])  # Raises ValueError
+wire.set_range("x", [37000, 45000])  # Valid
 ```
 
-**`validate_plane`** - Validates plane identifiers:
+**`validate_profile`** - Validates profile identifiers:
 ```python
-# Enforces: plane ∈ {"x", "y", "u"} (case-insensitive)
+# Enforces: profile ∈ {"x", "y", "u"} (case-insensitive)
 
-wire.use(plane="Z", val=True)  # Raises ValueError
-wire.use(plane="x", val=True)  # Valid (case-insensitive)
+wire.use(profile="Z", val=True)  # Raises ValueError
+wire.use(profile="x", val=True)  # Valid (case-insensitive)
 ```
 
 **`validate_integer`** - Validates integer parameters:
@@ -325,19 +355,35 @@ if not wire.initialize_status:
 wire.start_scan()
 ```
 
-**Speed Constraints**: Ensure speed satisfies hardware limits and beam rate requirements:
-```python
-# Optional pre-validation: check if IOC-calculated speed will be within limits
-wire_range = wire.x_range[1] - wire.x_range[0]
-expected_speed = wire.beam_rate * (wire_range / wire.scan_pulses)
+### Speed Validation
 
-# Verify against hardware limits
-if wire.speed_min < expected_speed < wire.speed_max:
-    wire.start_scan()  # IOC will calculate and apply speed
-else:
-    print(f"Expected speed {expected_speed} outside limits [{wire.speed_min}, {wire.speed_max}]")
-    # Adjust scan_pulses or range before starting
+A plane's on-the-fly scan speed is valid when:
+
 ```
+speed_floor < {x,y,u}_speed_calc < speed_max
+speed_floor = max(speed_min, mps_speed)
+```
+
+Both limits are exclusive. The check uses the live beam rate (through the IOC's calculation) with no fallback, so a beam rate of 0 is reported as invalid.
+
+Inner and outer are separate PVs set at different times, so the speed can be invalid between the two writes. Validation therefore checks the **current configuration** rather than individual writes: the GUI re-checks it continuously and the suite enforces it only when a scan starts.
+
+```python
+status = wire.range_status("x")
+status.state     # SpeedState: OK, TOO_FAST, TOO_SLOW, NO_BEAM, BAD_RANGE
+status.valid     # True only for OK
+status.speed     # IOC-calculated speed (um/s), plus speed_floor, speed_max,
+                 # inner, outer (um), scan_pulses, beam_rate (Hz)
+status.max_width # range width (um) at which speed reaches speed_max
+status.min_width # range width (um) at which speed reaches speed_floor
+
+if wire.invalid_profiles():
+    ...  # do not start an OTF scan
+```
+
+`range_status` checks in this order: inner ≥ outer (`BAD_RANGE`), beam rate 0 (`NO_BEAM`), then the speed limits. Because speed scales linearly with range width, `min_width` and `max_width` turn each limit into a target range width without needing the beam rate.
+
+`RangeStatus` is data only. Operator-facing text ("Too fast: range too large", "Narrow the range to less than 800 um") lives in `slacwire/speed_status.py` (`speed_summary`, `speed_advice`, `profile_message`). That advice deliberately never suggests changing scan pulses: operators fix speed by adjusting the range.
 
 ### Safety Interlocks
 
@@ -350,6 +396,7 @@ else:
 - Range ordering (inner < outer)
 - Type safety for all parameters
 - State preconditions for operations
+- Speed status reporting (`range_status`, `invalid_profiles`); enforcement happens in the suite before OTF scans
 
 ---
 
@@ -361,11 +408,23 @@ Associates wire scanner with downstream measurement devices and classification:
 
 ```python
 class WireMetadata(Metadata):
-    detectors: List[str]                    # Required: data acquisition devices
-    default_detector: str                   # Primary detector for RMS extraction
-    tmitloss: Optional[TMITLossBPMs]        # Upstream/downstream BPMs for TMIT loss
-    type: str                               # Device type classification
-    wire_type: str                          # Wire type classification
+    detectors: List[str] | Dict[str, List[str]]     # Data acquisition devices (may be CU/SC-keyed dict)
+    default_detector: str | Dict[str, str]           # Primary detector (may be CU/SC-keyed dict)
+    tmitloss: Optional[TMITLossBPMs]                 # Upstream/downstream BPMs for TMIT loss
+    jitter_bpms: Optional[List[str]]                 # BPMs for jitter correction
+    charge_toroids: Optional[List[str]]              # Toroids for charge normalization
+    type: str                                        # Device type classification
+    wire_type: str                                   # Wire type classification
+```
+
+**Timing-keyed dicts**: For beamlines that serve both CU and SC timing, `detectors` and `default_detector` may be dicts keyed by `"CU"` / `"SC"`. The measurement layer resolves these automatically based on the active beampath. Example:
+```yaml
+detectors:
+  CU: ["PMT29150:LTUH"]
+  SC: ["PMT29150:LTUH", "LBLM32A:LTUH"]
+default_detector:
+  CU: "PMT29150:LTUH"
+  SC: "PMT29150:LTUH"
 ```
 
 ### Detector Configuration
@@ -426,10 +485,10 @@ class WireCollection(BaseModel):
 ### Creation and Access
 
 ```python
-from slac_devices.reader import create_wire_collection
+from slac_devices.reader import create_wire
 
-# Load all wires from configuration
-collection = create_wire_collection()
+# Load all wires for an area (returns WireCollection when name is omitted)
+collection = create_wire(area="L3")
 
 # Access individual wire by name
 wire = collection.wires["WS28144"]
@@ -438,6 +497,8 @@ wire = collection.wires["WS28144"]
 for name, wire in collection.wires.items():
     print(f"{name}: Area {wire.area}, Enabled: {wire.enabled}")
 ```
+
+**Note**: There is no standalone `create_wire_collection()` function. Use `create_wire(area=...)` without `name` to get a `WireCollection`.
 
 ### Validation
 
@@ -488,26 +549,7 @@ for wire in collection.wires.values():
 
 ### Beam Rate Handling
 
-Some wire scanners lack dedicated beam rate PVs. The `Wire` class implements fallback logic:
-
-```python
-@property
-def beam_rate(self):
-    nc_areas = ["L3", "LI20", "LI24", "LI28", "LTUH", "DL1", "BC1", "BC2", "LTU"]
-    
-    if self.controls_information.PVs.beam_rate is None:
-        if self.area in nc_areas:
-            # Use global LCLS beam rate
-            return PV("EVNT:SYS0:1:LCLSBEAMRATE").get()
-        elif self.area == "DIAG0":
-            # Use timing system rate
-            return PV("TPG:SYS0:1:DST01:RATE").get()
-    else:
-        # Use wire-specific beam rate PV
-        return self.controls_information.PVs.beam_rate.get()
-```
-
-**Implication**: Developers working with beam rate should always use `wire.beam_rate` property rather than directly accessing the PV, as the property handles fallback logic transparently.
+Every wire scanner has a dedicated `<wire>:BEAMRATE` PV, so `beam_rate` is a required PV and `wire.beam_rate` reads it directly. (Earlier versions fell back to `EVNT:SYS0:1:LCLSBEAMRATE` or `TPG:SYS0:1:DST01:RATE` for wires without one; see CATER 180392.)
 
 
 ## Complete Usage Example
@@ -536,12 +578,14 @@ wire.use_y_wire = True
 wire.use_u_wire = True
 
 # 5. Set scan ranges (motor units of microns)
-wire.x_range = [37000, 45000]
-wire.y_range = [20000, 28000]
+wire.set_range("x", [37000, 45000])
+wire.set_range("y", [20000, 28000])
 
 # 6. Verify configuration
 print(f"Beam rate: {wire.beam_rate} Hz")
-print(f"Speed limits: {wire.speed_min}-{wire.speed_max} µm/s")
+print(f"Speed limits: {wire.speed_floor}-{wire.speed_max} µm/s")
+for status in wire.invalid_profiles():
+    print(f"{status.profile.upper()}: {status.state.value}")
 print(f"X range: {wire.x_range}")
 print(f"Y range: {wire.y_range}")
 print(f"U range: {wire.u_range}")
@@ -558,18 +602,16 @@ wire.start_scan()
 ### Error Handling
 
 ```python
-from pydantic import ValidationError
-
 try:
     # Attempt invalid range
-    wire.x_range = [45000, 37000]  # Inner > Outer
-except ValidationError as e:
+    wire.set_range("x", [45000, 37000])  # Inner > Outer
+except ValueError as e:
     print(f"Configuration error: {e}")
 
 try:
     # Attempt invalid plane
-    wire.use(plane="Z", val=True)
-except ValidationError as e:
+    wire.use(profile="Z", val=True)
+except ValueError as e:
     print(f"Invalid plane: {e}")
 
 # Check state before operations
@@ -606,7 +648,7 @@ current = wire.get_speed()
 
 ```python
 # Validation happens at assignment
-wire.x_range = [45000, 37000]  # Immediate ValidationError
+wire.set_range("x", [45000, 37000])  # Immediate ValueError
 
 # Without validation, error would occur at:
 # - EPICS IOC (cryptic error)
@@ -623,8 +665,9 @@ wire.x_range = [45000, 37000]  # Immediate ValidationError
 if not wire.initialize_status:
     raise RuntimeError(f"Wire {wire.name} not initialized")
 
-if not (wire.speed_min < wire.speed < wire.speed_max):
-    raise ValueError(f"Speed {wire.speed} outside hardware limits")
+invalid = wire.invalid_profiles()
+if invalid:
+    raise ValueError("; ".join(f"{s.profile}: {s.state.value}" for s in invalid))
 
 wire.start_scan()
 ```
@@ -684,8 +727,8 @@ wire.motor = 15000
 wire.controls_information.PVs.x_wire_inner.put(45000)
 wire.controls_information.PVs.x_wire_outer.put(37000)  # Invalid: outer < inner
 
-# Use properties
-wire.x_range = [37000, 45000]  # Validates inner < outer
+# Use set_range
+wire.set_range("x", [37000, 45000])  # Validates inner < outer
 ```
 
 ### 3. Assuming Synchronous Operations
@@ -734,7 +777,9 @@ else:
 
 ---
 
-## Next Steps
+## Related Documentation
 
-- **[03-measurement-layer.md](03-measurement-layer.md)**: Data collection, Gaussian fitting, and analysis *(coming soon)*
-- **[01-architecture-overview.md](01-architecture-overview.md)**: System-wide architecture context
+- [Architecture Overview](01-architecture-overview.md) — System-wide context
+- [Measurement Layer](03-measurement-layer.md) — Data collection and analysis
+- [Suite Layer](04-suite-layer.md) — Orchestration and run tracking
+- [GUI Layer](05-gui-layer.md) — Operator interface

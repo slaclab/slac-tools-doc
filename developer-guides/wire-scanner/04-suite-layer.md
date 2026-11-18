@@ -4,7 +4,7 @@
 
 **Audience**: Developers extending scan workflows, adding new output formats, or integrating suite functionality into higher-level tools
 
-**Last Updated**: June 18, 2026
+**Last Updated**: November 12, 2026
 
 ---
 
@@ -40,8 +40,13 @@ The Suite layer transforms raw measurement primitives into a production data acq
 | `slacwire/suite/_collect.py` | `CollectMixin` | `collect_single` (raw data without analysis) |
 | `slacwire/suite/_motion.py` | `MotionTestMixin` | `motion_test` (beam-less motion validation) |
 | `slacwire/suite/_results.py` | `ResultsMixin` | `latest_run`, `replot`, `summary` |
+| `slacwire/suite/_compare.py` | `CompareMixin` | `compare_detectors` (multi-detector overlay) |
 | `slacwire/suite/_diagnostics.py` | `DiagnosticsMixin` | `cache_info`, `cache_pvs`, `cache_summary` |
-| `slacwire/suite/_constants.py` | — | `WIRE_AREA_LOOKUP`, `Beampath` type, path utilities |
+| `slacwire/suite/_logbook.py` | `LogbookMixin` | `post_to_logbook`, `post_last_to_logbook` |
+| `slacwire/suite/_jitter_compare.py` | `JitterCompareMixin` | `jitter_compare`, `residual_compare`, FFT analysis |
+| `slacwire/suite/_loader.py` | `LoaderMixin` | `load_scan`, `discover_scans` (HDF5 file discovery) |
+| `slacwire/suite/_beamsizes.py` | `BeamsizesMixin` | `get_beamsizes` (multi-wire emittance extraction) |
+| `slacwire/_constants.py` | — | `WIRE_AREA_LOOKUP`, `VALID_BEAMPATHS`, path utilities (package root) |
 | `slacwire/view.py` | `WireScanView` | Plot generation (standalone figures and in-place GUI rendering) |
 | `slacwire/registry/registry.py` | `RunRegistry` | Persistent JSON audit trail of all scan runs |
 
@@ -55,7 +60,11 @@ The Suite layer transforms raw measurement primitives into a production data acq
 
 ```python
 @dataclass
-class WireScanSuite(DiagnosticsMixin, MotionTestMixin, CollectMixin, RunMixin, ResultsMixin, WireScanSuiteBase):
+class WireScanSuite(
+    LogbookMixin, JitterCompareMixin, CompareMixin, DiagnosticsMixin,
+    MotionTestMixin, CollectMixin, RunMixin, PreflightMixin, LoaderMixin, BeamsizesMixin,
+    ResultsMixin, WireScanSuiteBase
+):
     pass
 ```
 
@@ -73,11 +82,12 @@ suite = WireScanSuite(
     save=True,                 # write HDF5 after each scan
     save_plots=True,           # write PNG plot files
     show=True,                 # call fig.show() on generated plots
+    dev_mode=False,            # if True, skip registry logging on errors
 )
 ```
 
 On construction (`__post_init__` in `_base.py`):
-1. `_build_devices()` — creates `Wire` device instances via `create_wire(area, name)` for every wire in the list
+1. `_build_devices()` — creates `Wire` device instances via `create_wire(area, name)` for every wire in the list, then sorts both `wires` and `devices` by `sum_l_meters` (beamline order)
 2. `_build_view()` — instantiates a `WireScanView` for plotting
 3. Output directories are created: `outdir` (dated) and `plotdir` (outdir/plots)
 
@@ -85,8 +95,8 @@ On construction (`__post_init__` in `_base.py`):
 
 | Attribute | Type | Description |
 |-----------|------|-------------|
-| `wires` | `list[str]` | Wire names to operate on (e.g. `["WS28144"]`) |
-| `devices` | `dict[str, Wire]` | Cached device instances keyed by wire name |
+| `wires` | `list[str]` | Wire names to operate on (e.g. `["WS28144"]`); kept sorted by `sum_l_meters`. Reassigning rebuilds `devices` |
+| `devices` | `dict[str, Wire]` | Cached device instances keyed by wire name, in the same order as `wires` |
 | `beampath` | `Beampath` | Literal: `"CU_HXR"`, `"CU_SXR"`, `"SC_HXR"`, `"SC_SXR"`, `"SC_BSYD"`, `"SC_DIAG0"` |
 | `detector` | `str \| None` | Override detector; falls back to device default |
 | `outdir` | `Path` | HDF5 output directory (default: `/u1/lcls/physics/data/wire_scan/YYYY/MM/DD/`) |
@@ -97,27 +107,50 @@ On construction (`__post_init__` in `_base.py`):
 | `save` | `bool` | Write HDF5 files |
 | `show` | `bool` | Display plots interactively |
 | `save_plots` | `bool` | Write PNG plot files |
+| `dev_mode` | `bool` | Skip registry error logging (development use) |
 
 ### Public Methods
 
-#### `run_single(wire, scan_mode="otf", rms_detector=None)` — `_run.py`
+#### Per-wire default scan mode
+
+Every scan entry point (`run_single`, `run_all`, `collect_single`, `motion_test`)
+takes `scan_mode=None` by default. `None` resolves per wire through
+`slacwire._constants.resolve_scan_mode()`: wires listed in `SCAN_MODE_OVERRIDES`
+use the mapped mode, and every other wire uses `DEFAULT_SCAN_MODE` (`"otf"`).
+An explicit `scan_mode="otf"` or `"step"` always wins. The CLI (`--scan-mode`
+omitted) and the GUI pick up the same defaults.
+
+| Wire | Default | Reason |
+|------|---------|--------|
+| `WS02` | `"step"` | OTF unsupported due to lagging hardware |
+
+```python
+suite.run_single("WS02")                  # step (override)
+suite.run_single("WS02", scan_mode="otf") # explicit — OTF
+suite.run_all()                           # each wire uses its own default
+```
+
+#### `run_single(wire, scan_mode=None, rms_detector=None, jitter_correction=False, charge_normalization=False)` — `_run.py`
 
 Execute a complete scan for one wire: collection → analysis → save → plot → registry.
 
 ```python
 suite.run_single("WS28144", scan_mode="otf")
 suite.run_single("WS27644", scan_mode="step", rms_detector="PMT27650")
+suite.run_single("WS28144", jitter_correction=True, charge_normalization=True)
 ```
 
-#### `run_all(scan_mode="otf", rms_detector=None)` — `_run.py`
+For OTF scans, `run_single` first runs the pre-scan speed check (see [Pre-Scan Speed Check](#pre-scan-speed-check)). If it fails, `ValueError` is raised before any data collection or registry entry.
 
-Run all configured wires sequentially in the given scan mode.
+#### `run_all(scan_mode=None, rms_detector=None)` — `_run.py`
+
+Run all configured wires sequentially in the given scan mode (or each wire's default when `None`).
 
 ```python
 suite.run_all(scan_mode="otf")
 ```
 
-#### `collect_single(wire, scan_mode="otf")` — `_collect.py`
+#### `collect_single(wire, scan_mode=None)` — `_collect.py`
 
 Collect raw data without analysis. Useful for debugging or when custom post-processing is needed.
 
@@ -126,7 +159,7 @@ suite.collect_single("WS28144", scan_mode="step")
 raw_data = suite.latest_run("WS28144")  # collection-only result
 ```
 
-#### `motion_test(wire, scan_mode="otf", plot=True)` — `_motion.py`
+#### `motion_test(wire, scan_mode=None, plot=True)` — `_motion.py`
 
 Run beam-less motion validation for a single wire. Exercises the wire motion without requiring beam to verify mechanical behavior.
 
@@ -166,6 +199,18 @@ suite.summary()
 #     y :  σ =    38.7 µm
 ```
 
+#### `compare_detectors(wire, detectors=None) → list[Path]` — `_compare.py`
+
+Render multi-detector overlay plots for the latest scan of a wire. Each detector's profile is normalized (offset subtracted, scaled by fit amplitude) so shapes are directly comparable regardless of signal magnitude. Defaults to all detectors with fit results.
+
+```python
+# Compare all detectors
+suite.compare_detectors("WS28144")
+
+# Compare a specific subset
+suite.compare_detectors("WS28144", detectors=["PMT29150", "LBLM32A"])
+```
+
 #### `cache_info()` / `cache_pvs()` / `cache_summary()` — `_diagnostics.py`
 
 EPICS Channel Access cache inspection for debugging PV connection issues.
@@ -175,6 +220,79 @@ suite.cache_summary()    # Print formatted summary
 info = suite.cache_info()  # Get dict with context, counts, per-device breakdown
 pvs = suite.cache_pvs()    # Get actual PV names grouped by device
 ```
+
+#### `post_to_logbook(title, body="", attachment=None)` — `_logbook.py`
+
+Post an entry to the SLAC physics logbook. Logbook is auto-resolved from beampath: `SC_*` → `"lcls2"`, otherwise → `"lcls"`.
+
+```python
+suite.post_to_logbook("Wire scan complete", body="WS28144 σ_x=42µm")
+```
+
+#### `post_last_to_logbook(wire, ...)` — `_logbook.py`
+
+Post the latest scan result for a wire to the logbook, including profile plot images.
+
+#### `load_scan(path)` — `_loader.py`
+
+Load a single `.h5` scan file from disk and return a `WireMeasurementAnalysisResult`.
+
+```python
+result = suite.load_scan("/u1/lcls/physics/data/wire_scan/2026/10/13/OTF_WS28144.h5")
+```
+
+#### `discover_scans(wire, date, limit=10, subdir=None)` — `_loader.py`
+
+Discover and load `.h5` scans for a wire on a given date. Returns results sorted most-recent first.
+
+```python
+results = suite.discover_scans("WS28144", date="2026/10/13")
+results = suite.discover_scans("WS28144", date="2026/10/13", limit=None)  # all
+```
+
+#### `get_beamsizes(**run_kwargs)` — `_beamsizes.py`
+
+Extract beam sizes from all configured wires. Returns an `(n_wires, 2)` NumPy array with columns `[sigma_x, sigma_y]` in microns. Runs scans for any wires missing results.
+
+```python
+sizes = suite.get_beamsizes(scan_mode="otf")
+# sizes[0] → [sigma_x, sigma_y] for first wire
+```
+
+#### `jitter_compare(wire, ...)` — `_jitter_compare.py`
+
+Compare jitter-corrected vs uncorrected profiles for a wire.
+
+#### `residual_compare(wire, ...)` — `_jitter_compare.py`
+
+Compare fit residuals between jitter-corrected and uncorrected analyses.
+
+#### `fft_spectrum(wire, ...)` / `fft_overlay(wire, ...)` — `_jitter_compare.py`
+
+Compute and plot FFT spectra of fit residuals for vibration analysis.
+
+#### `vibration_summary(wire, ...)` — `_jitter_compare.py`
+
+Generate a comprehensive vibration diagnostic report: profiles, residuals, FFT, and overlay.
+
+#### `set_wires(wires)` — `_base.py`
+
+Replace the wire list and rebuild device instances (equivalent to `suite.wires = [...]`). Existing devices are reused; both `wires` and `devices` are re-sorted by `sum_l_meters`.
+
+```python
+suite.set_wires(["WS28144", "WS28444", "WS28744"])
+```
+
+### Pre-Scan Speed Check (`_preflight.py`)
+
+`PreflightMixin._check_scan_speed(device)` runs at the start of OTF `run_single` and `collect_single`. It calls `device.invalid_profiles()` and raises `ValueError` if any active plane's IOC-calculated speed is outside `speed_floor < speed < speed_max`:
+
+```
+Scan refused, invalid wire speed:
+WS28144 X Profile too fast: range too large. Narrow the range to less than 800 um
+```
+
+Step scans skip the check because they set their own motor speed. `run_all` logs a refused wire in `failed_wires` and continues. `format_invalid_profiles()` builds the message and is shared with the GUI.
 
 ### Internal Scan Flow (`_run_device_scan`)
 
@@ -236,7 +354,14 @@ To add a new wire, add an entry to `WIRE_AREA_LOOKUP` in `suite/_constants.py`.
                 └── Step_Trajectory_WS27644_20260529_141500.png
 ```
 
-Naming convention: `{Method}_{Type}_{Wire}_{Timestamp}.{ext}`
+Naming conventions:
+- HDF5: `{Method}_{Wire}_{Timestamp}.h5` (e.g., `OTF_WS28144_20260529_140000.h5`)
+- Trajectory plots: `{Method}_Trajectory_{Wire}_{Timestamp}.png`
+- Profile plots: `{Method}_Profile_{profile}_{Wire}_{Timestamp}.png`
+- Multi-panel: `{Method}_Multi_{Wire}_{Timestamp}.png`
+- Detector comparison: `{Method}_DetectorCompare_{Wire}_{Timestamp}.png`
+- Motion test: `MotionTest_Trajectory_{Wire}_{Timestamp}.png`
+- Jitter/FFT/Vibration plots use their own prefixes (e.g., `JitterCompare_`, `FFT_`, `Vibration_`)
 
 ### Scope Data Resolution
 
@@ -268,6 +393,10 @@ Clears and redraws a beam profile plot:
 
 The stage-to-beam coordinate transform uses `cos(45°)` for x and y profiles (wires mounted at 45°), and identity for u profiles.
 
+#### `draw_detector_comparison(fig, data, wire, profile, detectors=None)`
+
+Clears and redraws a multi-detector overlay into an existing figure. Each detector's measured data (dotted) and fitted curve (solid) are normalized for shape comparison. Defaults to all detectors with fit results for the given profile.
+
 ### Standalone Figure Creation (Suite)
 
 Methods that create new `plt.figure()` instances — used by the suite for saving to disk.
@@ -280,6 +409,14 @@ Same visualization as `draw_trajectory` but returns a new figure.
 
 Same visualization as `draw_profile` but returns a new figure.
 
+#### `plot_detector_comparison(data, profile, wire, detectors=None) → Figure`
+
+Creates a new figure overlaying normalized profiles from multiple detectors. Legend shows each detector's sigma. Defaults to all detectors with fit results.
+
+#### `render_detector_comparison(data, wire, profiles, detectors, file_prefix, plotdir, stamp, show, save) → list[Path]`
+
+Renders multi-detector comparison plots for all available profiles. Saves as `{prefix}_DetectorCompare_{profile}_{wire}_{stamp}.png`.
+
 #### `render(data, wire, detector, profiles, file_prefix, plotdir, stamp, show, save) → list[Path]`
 
 Primary entry point for the suite. Generates all plots for a completed scan:
@@ -288,9 +425,31 @@ Primary entry point for the suite. Generates all plots for a completed scan:
 2. Iterates over active profiles (x, y, u) and creates/shows/saves each profile plot
 3. Returns list of saved PNG paths
 
+#### `render_multi(data, wire, detector, profiles, file_prefix, plotdir, stamp, show, save) → list[Path]`
+
+Renders a multi-panel plot combining trajectory and all profiles in a single figure.
+
+#### `render_motion_test(data, wire, file_prefix, plotdir, stamp, show, save) → list[Path]`
+
+Renders trajectory plots from beamless motion test results (no detector data).
+
 #### `save_fig(fig, name, plotdir, stamp) → Path`
 
 Saves a figure to `{plotdir}/{name}_{stamp}.png` at 150 DPI with opaque white background (required for `img2pdf` used by the physics elog poster).
+
+#### `save_fig_to_path(fig, path) → Path`
+
+Saves a figure to an explicit file path (used by the GUI for logbook image export).
+
+#### Jitter and Vibration Analysis Plots
+
+These methods support the `JitterCompareMixin`:
+
+- `plot_jitter_compare(...)` — Overlay jitter-corrected vs uncorrected profiles
+- `plot_vibration_residuals(...)` — Plot fit residuals for vibration analysis
+- `plot_residual_compare(...)` — Compare residual distributions
+- `plot_fft_spectrum(...)` — FFT spectrum of fit residuals
+- `plot_fft_overlay(...)` — Overlay FFT spectra across profiles
 
 ---
 
@@ -359,12 +518,15 @@ The GUI layer uses the suite through these integration points:
 
 | GUI Need | Suite Method |
 |----------|-------------|
-| Execute a scan | `suite.run_single(wire, scan_mode)` |
+| Execute a scan | `suite.run_single(wire, scan_mode, jitter_correction, charge_normalization)` |
 | Get latest result for display | `suite.latest_run(wire)` |
 | Render trajectory into canvas | `suite.view.draw_trajectory(fig, data, wire, detector)` |
 | Render profile into canvas | `suite.view.draw_profile(fig, data, wire, detector, profile)` |
+| Render detector comparison into canvas | `suite.view.draw_detector_comparison(fig, data, wire, profile, detectors)` |
 | Clear canvas | `suite.view.clear_figure(fig)` |
 | Access run history | `suite.registry.entries` |
+| Post to logbook | `suite.post_to_logbook(title, body, attachment)` |
+| Save figure for logbook | `suite.view.save_fig_to_path(fig, path)` |
 
 The GUI runs scans on a `QThread` and receives results via Qt signals. The view's `draw_*` methods are called on the main thread after signal delivery, ensuring thread-safe GUI updates.
 
@@ -375,18 +537,20 @@ The GUI runs scans on a `QThread` and receives results via Qt signals. The view'
 The suite delegates all scan execution to Layer 2 via a single integration point:
 
 ```python
-def _measure(self, device, scan_mode, collect_only=False, rms_detector=None):
+def _measure(self, device, scan_mode, rms_detector=None,
+             jitter_correction=False, charge_normalization=False,
+             charge_toroid=None):
     measurement = WireBeamProfileMeasurement(
         beam_profile_device=device, beampath=self.beampath
     )
     return measurement.measure(
         scan_mode=scan_mode,
-        collect_only=collect_only,
         rms_detector=rms_detector,
+        jitter_correction=jitter_correction,
     )
 ```
 
-The suite does not directly instantiate collection or analysis classes — it uses `WireBeamProfileMeasurement.measure()` with `collect_only=True` for raw collection (`collect_single`) and `collect_only=False` for the full collection + analysis pipeline (`run_single`).
+The suite delegates scan execution to `WireBeamProfileMeasurement.measure()`. Collection-only workflows (`collect_single`) use a separate `_collect` method that calls the collection factory directly.
 
 ---
 
